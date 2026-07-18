@@ -1,0 +1,417 @@
+/* articul8 — Metro design system.
+   Square corners, no shadows/gradients, Inter, thin huge titles, accent only on
+   active/primary. Brand purple accent. Dark is the default; .dark on <html>. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700&display=swap");
+
+:root {
+  /* light theme */
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --fg-muted: #5a5a5a;
+  --fg-dim: #8a8a8a;
+  --tile-bg: #f2f2f2;
+  --tile-bg-hover: #e8e8e8;
+  --border: #d8d8d8;
+  --accent: #7054a5;
+  --accent-fg: #ffffff;
+  --ok: #4a9e5c;
+  --warn: #c9922b;
+  --err: #c0453b;
+
+  --track-bg: #ededed;
+  --lane: #e2e2e2;
+  --key: #7054a5;
+  --key-selected: #b299d6;
+
+  --gap: 1px;
+  --pad: 12px;
+  --eyebrow: 11px;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.dark {
+  --bg: #0d0d0d;
+  --fg: #f2f2f2;
+  --fg-muted: #a0a0a0;
+  --fg-dim: #6a6a6a;
+  --tile-bg: #1a1a1a;
+  --tile-bg-hover: #242424;
+  --border: #2a2a2a;
+  --accent: #8a6cc4;
+  --accent-fg: #0d0d0d;
+  --ok: #5cb872;
+  --warn: #d9a441;
+  --err: #d95a4e;
+
+  --track-bg: #141414;
+  --lane: #1e1e1e;
+  --key: #8a6cc4;
+  --key-selected: #c3aee2;
+}
+
+* {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Inter", system-ui, sans-serif;
+  font-weight: 400;
+  overflow: hidden;
+}
+
+/* ---- app shell grid ---------------------------------------------------- */
+.shell {
+  display: grid;
+  grid-template-rows: 44px 1fr 320px 24px;
+  grid-template-columns: 1fr 260px;
+  grid-template-areas:
+    "titlebar titlebar"
+    "viewport layers"
+    "timeline timeline"
+    "statusbar statusbar";
+  height: 100%;
+  background: var(--border);
+  gap: var(--gap);
+}
+
+.titlebar {
+  grid-area: titlebar;
+}
+.viewport {
+  grid-area: viewport;
+}
+.layers {
+  grid-area: layers;
+}
+.timeline {
+  grid-area: timeline;
+}
+.statusbar {
+  grid-area: statusbar;
+}
+
+.panel {
+  background: var(--bg);
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ---- title bar --------------------------------------------------------- */
+.titlebar {
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--pad);
+  gap: 16px;
+}
+.wordmark {
+  font-weight: 200;
+  font-size: 22px;
+  letter-spacing: 1px;
+}
+.wordmark b {
+  font-weight: 600;
+  color: var(--accent);
+}
+.titlebar .spacer {
+  flex: 1;
+}
+
+/* ---- generic bits ------------------------------------------------------ */
+.eyebrow {
+  font-size: var(--eyebrow);
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  padding: 8px var(--pad);
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  transition: background 0.08s, color 0.08s, border-color 0.08s;
+}
+button:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+button.primary:hover,
+button.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+button.icon {
+  padding: 5px 8px;
+  min-width: 30px;
+}
+
+/* ---- viewport ---------------------------------------------------------- */
+.viewport {
+  position: relative;
+  background:
+    linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 32px 32px,
+    var(--tile-bg);
+  background-blend-mode: normal;
+}
+.viewport .stage {
+  position: absolute;
+  inset: 0;
+}
+.viewport .stage svg {
+  width: 100%;
+  height: 100%;
+}
+.viewport .badge {
+  position: absolute;
+  left: var(--pad);
+  bottom: var(--pad);
+  font-size: var(--eyebrow);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  pointer-events: none;
+}
+
+/* ---- layers ------------------------------------------------------------ */
+.layers {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+.layers .list {
+  overflow: auto;
+  flex: 1;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--pad);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  font-size: 12px;
+}
+.row:hover {
+  background: var(--tile-bg-hover);
+}
+.row.selected {
+  border-left-color: var(--accent);
+  background: var(--tile-bg);
+}
+.row .name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row .meta {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.row .vis {
+  width: 18px;
+  text-align: center;
+  color: var(--fg-muted);
+  user-select: none;
+}
+.row.hidden .name,
+.row.hidden .meta {
+  color: var(--fg-dim);
+  text-decoration: line-through;
+}
+.skinbar {
+  display: flex;
+  gap: 6px;
+  padding: 8px var(--pad);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+select {
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--tile-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+}
+
+/* ---- timeline ---------------------------------------------------------- */
+.timeline {
+  background: var(--bg);
+  display: grid;
+  grid-template-rows: 40px 1fr;
+  min-height: 0;
+}
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--pad);
+  border-bottom: 1px solid var(--border);
+}
+.transport .time {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-left: 8px;
+  letter-spacing: 0.5px;
+}
+.transport .spacer {
+  flex: 1;
+}
+.dope {
+  min-height: 0;
+  overflow: hidden;
+  background: var(--track-bg);
+}
+
+/* ---- vis-timeline · Metro theme --------------------------------------- */
+.dope .vis-timeline {
+  border: none;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 12px;
+}
+.dope .vis-panel.vis-center,
+.dope .vis-panel.vis-left,
+.dope .vis-panel.vis-right,
+.dope .vis-panel.vis-top,
+.dope .vis-panel.vis-bottom {
+  border-color: var(--border);
+}
+/* left tree/label column */
+.dope .vis-labelset .vis-label {
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.dope .vis-labelset .vis-label .vis-inner {
+  width: 100%;
+  padding: 0 8px;
+}
+.dope .vis-label .lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.dope .vis-label .lbl .kd {
+  color: var(--fg-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.dope .vis-label.grp .nm {
+  color: var(--fg);
+  font-weight: 500;
+}
+.dope .vis-label.sel {
+  background: var(--tile-bg);
+}
+.dope .vis-label.sel .nm {
+  color: var(--accent);
+}
+.dope .vis-label.vis-nesting-group {
+  cursor: pointer;
+}
+/* lane rows */
+.dope .vis-foreground .vis-group {
+  border-bottom: 1px solid var(--border);
+}
+.dope .vis-itemset,
+.dope .vis-panel.vis-background,
+.dope .vis-foreground {
+  background: var(--track-bg);
+}
+.dope .vis-panel.vis-background .vis-group {
+  border-bottom: 1px solid var(--border);
+}
+/* time ruler */
+.dope .vis-time-axis .vis-text {
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+.dope .vis-time-axis .vis-grid.vis-minor {
+  border-color: var(--lane);
+}
+.dope .vis-time-axis .vis-grid.vis-major {
+  border-color: var(--border);
+}
+.dope .vis-panel.vis-top {
+  background: var(--bg);
+}
+/* keyframes — Metro diamonds */
+.dope .vis-item.vis-point {
+  background: transparent;
+  border: none;
+}
+.dope .vis-item.vis-dot {
+  border-color: var(--key);
+  background: var(--key);
+  border-width: 5px;
+  transform: rotate(45deg);
+}
+.dope .vis-item.vis-selected .vis-dot,
+.dope .vis-item.vis-point.vis-selected .vis-dot {
+  border-color: var(--key-selected);
+  background: var(--key-selected);
+}
+/* playhead */
+.dope .vis-custom-time.playhead {
+  background: var(--accent);
+  width: 2px;
+  cursor: ew-resize;
+}
+
+
+/* ---- status bar -------------------------------------------------------- */
+.statusbar {
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 var(--pad);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+}
+.statusbar .mode {
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--accent);
+}
+.statusbar .spacer {
+  flex: 1;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50% !important;
+  background: var(--ok);
+  display: inline-block;
+}

@@ -1,0 +1,24 @@
+{
+  "name": "articul8",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SVG-native 2.5D skeletal animation editor and runtime",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "editor"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspace @articul8/editor",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc -b"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@articul8/core",
+  "version": "0.0.0",
+  "description": "Pure 2.5D skeletal animation core: bones, channels, projection, constraints, .rig format. Backend-agnostic.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}
