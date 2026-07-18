@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>articul8 · cat</title>
+    <style>
+      #stage svg { width: 100%; height: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>articul8 — cat</h1>
+    <div id="stage" style="width: 320px"></div>
+    <p>
+      <button id="toggle">Pause</button>
+      <input id="scrub" type="range" min="0" max="2000" value="0" />
+      <span id="clock">0 ms</span>
+    </p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

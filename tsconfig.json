@@ -1,8 +1,6 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/runtime-svg" },
-    { "path": "./editor" }
+    { "path": "./packages/runtime" }
   ]
 }
