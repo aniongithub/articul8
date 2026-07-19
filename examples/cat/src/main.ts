@@ -42,7 +42,7 @@ const lookY = axis(
 const heart = sampler(clip(t.morph!), clamp);
 const openEyes = { "eyeR.sy": 1, "eyeL.sy": 1 };
 
-const LOVE = 1200; // one bloom-and-settle, in ms
+const LOVE = 800; // one bloom-and-settle, in ms
 let pop = -Infinity; // clock time of the last click; -∞ = at rest
 
 /** A one-shot half-sine over `[pop, pop + LOVE]`: 0 → 1 → 0, then rest at 0. */
@@ -109,7 +109,9 @@ function frame(now: number): void {
 
 function setPlaying(next: boolean): void {
   playing = next;
-  toggle.textContent = playing ? "Pause" : "Play";
+  toggle.dataset.playing = String(playing);
+  toggle.setAttribute("aria-label", playing ? "Pause" : "Play");
+  toggle.setAttribute("title", playing ? "Pause" : "Play");
   cancelAnimationFrame(raf);
   if (playing) raf = requestAnimationFrame(frame);
 }
