@@ -1,4 +1,4 @@
-import { rig, clip, sampler, place, axis, mix, loop, clamp } from "@articul8/runtime";
+import { rig, clip, place, axis, mix } from "@articul8/runtime";
 
 const stage = document.querySelector<HTMLDivElement>("#stage")!;
 const scrub = document.querySelector<HTMLInputElement>("#scrub")!;
@@ -16,12 +16,14 @@ const view = r.bind(stage, svg);
 const t = r.tracks;
 
 /**
- * Three animations, each a lambda over one explicit variable. `blink` loops on
- * a raw millisecond clock; `lookX`/`lookY` are blendspaces placing a clip on
- * each side of centre, so a cursor coordinate in [-1, 1] samples the near side
- * and leaves the far one abstaining.
+ * Three animations, each a lambda over one explicit variable. `blink` is a bare
+ * clip read straight on the millisecond clock — it loops because its *track*
+ * declares `"wrap": "loop"` in the rig, tiling its own 2000 ms span, so nothing
+ * here maps time by hand. `lookX`/`lookY` are blendspaces placing a clip on each
+ * side of centre, so a cursor coordinate in [-1, 1] samples the near side and
+ * leaves the far one abstaining.
  */
-const blink = place(sampler(clip(t.blink!), loop), { offset: 0, scale: 2000 });
+const blink = clip(t.blink!);
 const lookX = axis(
   place(clip(t.lookRight!), { offset: 0, scale: +1 }), // begins at 0, ends at +1
   place(clip(t.lookLeft!), { offset: 0, scale: -1 }), // begins at 0, ends at -1
@@ -33,25 +35,26 @@ const lookY = axis(
 
 /**
  * The morph is *the same machinery* as the blink, placed on the same clock —
- * only relative to the click instead of the origin. `blink` sits at offset 0 and
- * loops; `heart` is the morph clip placed at the last click and clamped, so it
- * holds the resting eye until a click moves its origin to *now* and it plays
- * through once over `BLOOM` ms. That move is all the click does — `place` maps
- * `ms → [0, 1]` exactly as it does for `blink`, so no clip time is computed by
- * hand. The bloom's whole shape — its easing, its colour — is in the clip. And
- * because `blink` writes `eye.sy` while `heart` writes `eye`/`eye.fill`, both
- * fold into the one `mix` below and a blooming heart still blinks.
+ * only relative to the click instead of the origin. `blink` loops on its own
+ * span; `heart` is the morph clip placed at the last click, and its track
+ * declares `"wrap": "clamp"`, so it holds the resting eye until a click moves
+ * its origin to *now* and it plays through once over `BLOOM` ms. That move is
+ * all the click does — `place` maps `ms → [0, 1]` exactly as it does for a
+ * blendspace, so no clip time is computed by hand. The bloom's whole shape — its
+ * easing, its colour — is in the clip. And because `blink` writes `eye.sy` while
+ * `heart` writes `eye`/`eye.fill`, both fold into the one `mix` below and a
+ * blooming heart still blinks.
  */
-const morph = sampler(clip(t.morph!), clamp);
+const morph = clip(t.morph!);
 const BLOOM = 900; // one eye→heart→eye round trip, in ms
 let heart = place(morph, { offset: -Infinity, scale: BLOOM }); // at rest: clamped open
 
 /**
  * The sniff is a *procedural* channel, not a keyframe one — its `nose.y` is a
  * noise wave generated straight from the clock. `clip` reads it exactly like any
- * track; the rig gave the generator-only track a unit duration, so `sniff(ms)`
- * passes the raw clock through and the wave reads absolute time. It wanders the
- * nose up and down forever, no trigger, no state.
+ * track; a generator owns no span and bypasses the wrap, so `sniff(ms)` passes
+ * the raw clock through and the wave reads absolute time. It wanders the nose up
+ * and down forever, no trigger, no state.
  */
 const sniff = clip(t.sniff!);
 

@@ -66,10 +66,10 @@ describe("generator · rig channel", () => {
     },
   };
 
-  it("builds a generator-only track with a unit duration (clock passes through)", () => {
+  it("builds a generator-only track with no span of its own (raw clock passes through)", () => {
     const t = rig(data).tracks.sniff!;
-    expect(t.duration).toBe(1);
-    // sample(track, u) → t = u·1 = u, so the wave reads the raw clock.
+    expect(t.duration).toBe(0);
+    // A generator owns no span and bypasses wrap — sample hands it the raw clock.
     const n = noise({ bias: c(5), amp: c(1), freq: c(4) });
     expect(sample(t, 250)["nose.y"]).toBeCloseTo(n(250));
   });

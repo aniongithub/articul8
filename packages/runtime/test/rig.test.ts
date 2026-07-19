@@ -49,8 +49,8 @@ describe("rig · skin (end to end)", () => {
       animation: { move: { channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } },
     }).tracks["move"]!;
     expect(sample(eased, 0)["head.x"]).toBe(0);
-    expect(sample(eased, 1)["head.x"]).toBe(10);
-    expect(sample(eased, 0.5)["head.x"] as number).toBeLessThan(5); // eased below the linear 5
-    expect(sample(plain, 0.5)["head.x"]).toBeCloseTo(5);
+    expect(sample(eased, 1000)["head.x"]).toBe(10);
+    expect(sample(eased, 500)["head.x"] as number).toBeLessThan(5); // eased below the linear 5
+    expect(sample(plain, 500)["head.x"]).toBeCloseTo(5);
   });
 });

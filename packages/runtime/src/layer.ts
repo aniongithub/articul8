@@ -1,43 +1,31 @@
 import { blend, type Pose } from "./pose";
-import { sample, type Track } from "./track";
+import { sample, type Track, type Wrap } from "./track";
 
 /**
- * An animation is a lambda: a coordinate `v` in, a pose out. `v` is read like a
- * texture coordinate — `0` is the beginning of the anim, `1` is its end — so a
- * pose is just a constant anim, and everything larger is built by placing and
- * blending these lambdas. The variable itself is always explicit: you thread it
- * in at the callsite, `blink(t)`, `lookX(x)`.
+ * An animation is a lambda: a coordinate `v` in, a pose out. For a timed clip
+ * `v` is the absolute clock (ms); for a blendspace it is a spatial parameter (a
+ * gaze in `[-1, 1]`). Either way a pose is just a constant anim, and everything
+ * larger is built by placing and blending these lambdas. The variable itself is
+ * always explicit: you thread it in at the callsite, `blink(t)`, `lookX(x)`.
  */
 export type Anim = (v: number) => Pose;
 
 /**
- * A coordinate remap on `[0, 1]`: a texture wrap mode. It decides what a `v`
- * outside the unit span means before the anim ever reads it.
+ * The wrap now lives with the track — it is the track's own edge rule, spoken in
+ * absolute time — but the placement/blend vocabulary re-exports it so a caller
+ * composing by hand keeps one import.
  */
-export type Wrap = (v: number) => number;
+export { hold, clamp, loop, pingpong, type Wrap } from "./track";
 
-/** Transparent border: leave `v` untouched, so anything outside `[0, 1]` runs
- * off the keys and the anim abstains (no vote). The default edge. */
-export const hold: Wrap = (v) => v;
-
-/** `CLAMP_TO_EDGE`: hold the nearest edge frame forever. */
-export const clamp: Wrap = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
-
-/** `REPEAT`: tile the anim end to end. */
-export const loop: Wrap = (v) => ((v % 1) + 1) % 1;
-
-/** `MIRRORED_REPEAT`: tile, flipping every other copy, so it never jumps. */
-export const pingpong: Wrap = (v) => {
-  const t = loop(v / 2) * 2;
-  return t > 1 ? 2 - t : t;
-};
-
-/** Read a track as an animation over its own `[0, 1]` span. */
+/** Read a track as an animation, sampled at the coordinate it is handed —
+ *  absolute time for a clip, threaded straight through the track's own wrap. */
 export const clip = (track: Track): Anim => (v) => sample(track, v);
 
 /**
- * Wrap a clip's edges: how it behaves at and beyond `0` and `1`. This is the
- * *only* place edge behavior lives — placement is somebody else's job.
+ * Re-wrap a clip at the callsite — an *ad-hoc* edge rule layered over whatever
+ * the track already declares. The track's JSON `wrap` is the sensible default;
+ * this is for the rarer case where the same track loops in one place and clamps
+ * in another. It maps the coordinate before the clip reads it (period 1).
  */
 export const sampler = (anim: Anim, wrap: Wrap): Anim => (v) => anim(wrap(v));
 

@@ -3,7 +3,7 @@ import { bindSkin, type Skin, type SkinMap } from "./skin";
 import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
 import { parseAttr, type Attr } from "./attr";
 import { type Pose } from "./pose";
-import { at, type Channel, type Track } from "./track";
+import { at, type Channel, type Track, type Wrap, hold, clamp, loop, pingpong } from "./track";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
 import { interpolate } from "polymorph-js";
@@ -46,8 +46,13 @@ type ChannelData =
   | { readonly keys: Readonly<Record<string, KeyVal>> }
   | ({ readonly fn: string } & KnobEnv);
 
+/** The named edge rules a track may declare in JSON — its own `wrap`. */
+const wraps: Readonly<Record<string, Wrap>> = { hold, clamp, loop, pingpong };
+
 interface TrackData {
   readonly channels: Readonly<Record<string, ChannelData>>;
+  /** What a time past this track's span means — defaults to `hold` (abstain). */
+  readonly wrap?: string;
 }
 
 /** One key, unwrapped to its value and (optional) handles. */
@@ -263,13 +268,12 @@ export function rig(data: RigData): Rig {
 
       // A `fn` channel is a procedural wave, not stored keys: build the named
       // generator (its knobs may themselves be waves or key lists) and let it
-      // vote every frame. Such a channel has no span of its own, so it lends the
-      // track a unit duration — then a `sample(track, u)` passes the clock
-      // straight through as `t = u·1`, and the wave reads absolute time exactly
-      // as authored (freq in real Hz).
+      // vote every frame. A wave is born infinite — it owns no span and lends
+      // the track no duration, and `sample` hands it the raw absolute clock,
+      // never the track's wrap — so it reads time exactly as authored (freq in
+      // real Hz) whether or not any keyframe channel beside it loops.
       if ("fn" in cd) {
         channels[c] = { times: [], values: [], fn: buildGen(cd) };
-        duration = Math.max(duration, 1);
         continue;
       }
 
@@ -315,7 +319,13 @@ export function rig(data: RigData): Rig {
       channels[c] = { times, values: entries.map((e) => e.v as number), eases: easesOf(entries) };
       duration = Math.max(duration, times[times.length - 1] ?? 0);
     }
-    tracks[name] = { duration, channels };
+    const td = data.animation[name]!;
+    let wrap: Wrap | undefined;
+    if (td.wrap) {
+      wrap = wraps[td.wrap];
+      if (!wrap) throw new Error(`articul8: track "${name}" names no wrap "${td.wrap}"`);
+    }
+    tracks[name] = { duration, channels, wrap };
   }
 
   const bindEls = (els: Obj[]): Puppet => {

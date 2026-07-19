@@ -21,13 +21,42 @@ export interface Channel {
 }
 
 /**
- * A named animation: a bag of channels over a shared span. `duration` is the
- * span's length, so a sample takes a normalised `u ∈ [0, 1]` — the beginning
- * of the track to its end, read like a texture coordinate.
+ * A coordinate remap in *absolute time*: given a time and the track's own extent
+ * (its `duration`), return the time actually read. This is the missing half of a
+ * finite key list's definition — what a time past its end means. A generator is
+ * born infinite; a keyframe track is finite until a wrap completes it. It sits
+ * beside `duration` on the track because the two belong together: the span, and
+ * the rule beyond it.
+ */
+export type Wrap = (t: number, duration?: number) => number;
+
+/** Transparent border: leave the time untouched, so a keyframe channel runs off
+ *  its keys and abstains (no vote). The default edge — today's behaviour. */
+export const hold: Wrap = (t) => t;
+
+/** `CLAMP_TO_EDGE`: hold the nearest edge frame forever. */
+export const clamp: Wrap = (t, d = 1) => (t < 0 ? 0 : t > d ? d : t);
+
+/** `REPEAT`: tile the track end to end over its own span. */
+export const loop: Wrap = (t, d = 1) => ((t % d) + d) % d;
+
+/** `MIRRORED_REPEAT`: tile, flipping every other copy, so it never jumps. */
+export const pingpong: Wrap = (t, d = 1) => {
+  const x = loop(t, 2 * d);
+  return x > d ? 2 * d - x : x;
+};
+
+/**
+ * A named animation: a bag of channels over a shared span, read in absolute
+ * time. `duration` is the span's length; `wrap` says what a time beyond it means
+ * (loop, clamp, …), defaulting to `hold` — abstain past the edges. Together they
+ * make a keyframe track a total `t → value`, exactly like a generator: the
+ * extent, and the rule past it.
  */
 export interface Track {
   readonly duration: number;
   readonly channels: Readonly<Record<string, Channel>>;
+  readonly wrap?: Wrap;
 }
 
 /**
@@ -68,16 +97,18 @@ export const at = (ch: Channel, t: number): Value | undefined => {
 };
 
 /**
- * Sample a whole track at `u ∈ [0, 1]` into a (sparse) pose. `u` spans the
- * track from start to end; anything outside simply abstains, so the caller's
- * chosen wrap (clamp, loop, pingpong) is the only thing that decides what a
- * `u` past the edges means.
+ * Sample a whole track at an absolute time `t` into a (sparse) pose. Keyframe
+ * channels are read through the track's `wrap` (so a looping track tiles, a
+ * clamping one holds its edges) while a generator channel takes the raw clock —
+ * it is already infinite and owns no span to wrap. A channel that still lands
+ * outside its keys abstains, leaving that slot to whoever else votes.
  */
-export function sample(track: Track, u: number): Pose {
-  const t = u * track.duration;
+export function sample(track: Track, t: number): Pose {
+  const wrap = track.wrap ?? hold;
   const pose: Pose = {};
   for (const c in track.channels) {
-    const v = at(track.channels[c]!, t);
+    const ch = track.channels[c]!;
+    const v = at(ch, ch.fn ? t : wrap(t, track.duration));
     if (v !== undefined) pose[c] = v;
   }
   return pose;
