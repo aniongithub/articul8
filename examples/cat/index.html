@@ -6,6 +6,7 @@
     <title>articul8 · cat</title>
     <style>
       #stage svg { width: 100%; height: auto; }
+      #stage { cursor: pointer; }
     </style>
   </head>
   <body>
@@ -15,6 +16,10 @@
       <button id="toggle">Pause</button>
       <input id="scrub" type="range" min="0" max="2000" value="0" />
       <span id="clock">0 ms</span>
+    </p>
+    <p>
+      <button id="love">❤ Love</button>
+      <span>or click the cat</span>
     </p>
     <script type="module" src="/src/main.ts"></script>
   </body>

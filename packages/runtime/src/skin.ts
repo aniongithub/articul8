@@ -80,6 +80,9 @@ export function bindSkin(
     });
   }
 
+  const idOf = new Map<number, string>();
+  for (const id in ids) idOf.set(ids[id]!, id);
+
   const restWorld = world(skeleton, {});
   const restInverse: Record<string, Mat> = {};
   for (const b in restWorld) restInverse[b] = invert(restWorld[b]!);
@@ -92,8 +95,11 @@ export function bindSkin(
 
       const out = new Map<number, string>();
       for (const [i, b] of bound) {
+        const key = idOf.get(i);
+        const geo = (key !== undefined ? pose[key] : undefined) ?? pose[String(i)];
+        const g = Array.isArray(geo) ? (geo as readonly number[]) : undefined;
         b.path.points.forEach((pt, k) => {
-          const rest = b.rest[k]!;
+          const rest = g ? { x: g[2 * k]!, y: g[2 * k + 1]! } : b.rest[k]!;
           const inf = b.influences[k]!;
           let x = 0;
           let y = 0;

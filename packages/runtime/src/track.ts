@@ -1,9 +1,9 @@
-import { type Pose } from "./pose";
+import { type Pose, type Value } from "./pose";
 
 /** One channel's keyframes: parallel, time-sorted arrays. */
 export interface Channel {
   readonly times: readonly number[];
-  readonly values: readonly number[];
+  readonly values: readonly Value[];
 }
 
 /**
@@ -17,12 +17,22 @@ export interface Track {
 }
 
 /**
+ * Interpolate between two keyframe values. Scalars and vectors follow the same
+ * affine law — a straight lerp on a number, or elementwise on a geometry — so
+ * a shape key tweens exactly like a bone angle, one branch deep and no deeper.
+ */
+const lerp = (a: Value, b: Value, f: number): Value =>
+  typeof a === "number" && typeof b === "number"
+    ? a + (b - a) * f
+    : (a as readonly number[]).map((av, k) => av + ((b as readonly number[])[k]! - av) * f);
+
+/**
  * Sample one channel at an absolute time. Returns `undefined` when the time
  * falls outside the channel's keys — the channel then abstains from the blend
  * (no-vote), rather than holding its last value. Contribution requires a
  * bracket, always.
  */
-const at = (ch: Channel, t: number): number | undefined => {
+const at = (ch: Channel, t: number): Value | undefined => {
   const { times, values } = ch;
   const n = times.length;
   if (n === 0 || t < times[0]! || t > times[n - 1]!) return undefined;
@@ -33,7 +43,7 @@ const at = (ch: Channel, t: number): number | undefined => {
   const v0 = values[i]!;
   const v1 = values[i + 1] ?? v0;
   const span = t1 - t0;
-  return span === 0 ? v0 : v0 + (v1 - v0) * ((t - t0) / span);
+  return span === 0 ? v0 : lerp(v0, v1, (t - t0) / span);
 };
 
 /**

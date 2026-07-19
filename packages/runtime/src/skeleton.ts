@@ -1,5 +1,9 @@
 import { type Mat, identity, mul, translate, rotate, scale } from "./matrix";
-import { type Pose } from "./pose";
+import { type Pose, type Value } from "./pose";
+
+/** Bone channels are always scalar; a geometry vote on a bone is simply ignored. */
+const num = (v: Value | undefined): number | undefined =>
+  typeof v === "number" ? v : undefined;
 
 /**
  * A bone's rest transform, parent-relative. Every field defaults, so a rig
@@ -19,11 +23,11 @@ export type Skeleton = Readonly<Record<string, Bone>>;
 
 /** The bone's five scalars: its rest value, each overridable by the pose. */
 const resolve = (name: string, bone: Bone, pose: Pose) => ({
-  x: pose[`${name}.x`] ?? bone.x ?? 0,
-  y: pose[`${name}.y`] ?? bone.y ?? 0,
-  rotation: pose[`${name}.rotation`] ?? bone.rotation ?? 0,
-  sx: pose[`${name}.sx`] ?? bone.sx ?? 1,
-  sy: pose[`${name}.sy`] ?? bone.sy ?? 1,
+  x: num(pose[`${name}.x`]) ?? bone.x ?? 0,
+  y: num(pose[`${name}.y`]) ?? bone.y ?? 0,
+  rotation: num(pose[`${name}.rotation`]) ?? bone.rotation ?? 0,
+  sx: num(pose[`${name}.sx`]) ?? bone.sx ?? 1,
+  sy: num(pose[`${name}.sy`]) ?? bone.sy ?? 1,
 });
 
 /** Local transform: move to the joint, then rotate and scale about it. */

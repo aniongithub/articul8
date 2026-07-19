@@ -5,7 +5,7 @@
  * transforms into moved path points. Nothing is retained; the caller owns the
  * clock and asks for a frame whenever it likes.
  */
-export { blend, type Pose } from "./pose";
+export { blend, type Pose, type Value } from "./pose";
 export { sample, type Track, type Channel } from "./track";
 export {
   clip,

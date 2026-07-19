@@ -14,6 +14,9 @@
     }
   },
   "files": ["dist", "src"],
+  "dependencies": {
+    "polymorph-js": "^1.0.2"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run"
