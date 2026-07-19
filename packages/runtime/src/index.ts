@@ -6,7 +6,15 @@
  * clock and asks for a frame whenever it likes.
  */
 export { blend, type Pose, type Value } from "./pose";
-export { sample, type Track, type Channel } from "./track";
+export { sample, at, type Track, type Channel } from "./track";
+export { sine, noise, generators, type Env, type Knob, type Generator } from "./generator";
+export {
+  linear,
+  bezier,
+  segment,
+  type Ease,
+  type Handle,
+} from "./ease";
 export {
   clip,
   sampler,
@@ -23,7 +31,8 @@ export {
 export { world, type Bone, type Skeleton } from "./skeleton";
 export { parsePath, buildPath, type ParsedPath, type Pt, type Seg } from "./path";
 export { bindSkin, type Skin, type SkinMap } from "./skin";
-export { rig, type Rig, type RigData, type View } from "./rig";
+export { rig, type Rig, type RigData, type View, type Puppet, type Attrs } from "./rig";
+export { parseAttr, type Attr } from "./attr";
 export {
   identity,
   translate,

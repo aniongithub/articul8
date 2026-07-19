@@ -76,4 +76,31 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
     const bad = { animation: { m: { channels: { eye: { keys: { "1": "ghost" } } } } } };
     expect(() => rig(bad).bind(`<svg><path id="eye" d="${eye}"/></svg>`)).toThrow(/names no object/);
   });
+
+  it("plays a self-referencing round trip: rest → target → rest, one reconcile", () => {
+    // The eye names *itself* at 0 and 1 and the heart at the midpoint — a whole
+    // bloom-and-settle clip, no code, still one target and one shared topology.
+    const trip = {
+      animation: { m: { channels: { eye: { keys: { "0": "eye", "0.5": "heart", "1": "eye" } } } } },
+    };
+    const r = rig(trip);
+    r.bind(svg);
+    const ch = r.tracks.m!.channels.eye!;
+    expect(ch.times).toEqual([0, 0.5, 1]);
+    const [a, b, c] = ch.values as number[][];
+    expect(a).toEqual(c); // both ends are the very same rest vector
+    expect(a).not.toEqual(b); // the middle is the reconciled target
+    const t = r.tracks.m!;
+    expect(sample(t, 0).eye).toEqual(a);
+    expect(sample(t, 0.5).eye).toEqual(b);
+    expect(sample(t, 1).eye).toEqual(c);
+  });
+
+  it("refuses a morph that blooms to more than one distinct target", () => {
+    const two = {
+      animation: { m: { channels: { eye: { keys: { "0.5": "heart", "1": "star" } } } } },
+    };
+    const art = `<svg><path id="eye" d="${eye}"/><path id="heart" d="${heart}"/><path id="star" d="${eye}"/></svg>`;
+    expect(() => rig(two).bind(art)).toThrow(/one for now/);
+  });
 });

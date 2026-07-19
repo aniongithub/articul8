@@ -32,24 +32,28 @@ const lookY = axis(
 );
 
 /**
- * The morph is *the same machinery* one channel wider: `clip(t.morph)` is an
- * anim whose pose carries each eye's whole shape, so a weight in [0, 1] tweens
- * eye→heart exactly like `lookX` tweens a bone. Here that weight is no slider
- * but a *reaction*: a click stamps `pop`, and `surge` reads the clock since then
- * as a half-sine bloom, so the eyes swell to hearts and settle back on their
- * own. The same scalar hushes the blink — the lids hold open while love is high.
+ * The morph is *the same machinery* as the blink, placed on the same clock —
+ * only relative to the click instead of the origin. `blink` sits at offset 0 and
+ * loops; `heart` is the morph clip placed at the last click and clamped, so it
+ * holds the resting eye until a click moves its origin to *now* and it plays
+ * through once over `BLOOM` ms. That move is all the click does — `place` maps
+ * `ms → [0, 1]` exactly as it does for `blink`, so no clip time is computed by
+ * hand. The bloom's whole shape — its easing, its colour — is in the clip. And
+ * because `blink` writes `eye.sy` while `heart` writes `eye`/`eye.fill`, both
+ * fold into the one `mix` below and a blooming heart still blinks.
  */
-const heart = sampler(clip(t.morph!), clamp);
-const openEyes = { "eyeR.sy": 1, "eyeL.sy": 1 };
+const morph = sampler(clip(t.morph!), clamp);
+const BLOOM = 900; // one eye→heart→eye round trip, in ms
+let heart = place(morph, { offset: -Infinity, scale: BLOOM }); // at rest: clamped open
 
-const LOVE = 800; // one bloom-and-settle, in ms
-let pop = -Infinity; // clock time of the last click; -∞ = at rest
-
-/** A one-shot half-sine over `[pop, pop + LOVE]`: 0 → 1 → 0, then rest at 0. */
-const surge = (ms: number): number => {
-  const x = (ms - pop) / LOVE;
-  return x <= 0 || x >= 1 ? 0 : Math.sin(Math.PI * x);
-};
+/**
+ * The sniff is a *procedural* channel, not a keyframe one — its `nose.y` is a
+ * noise wave generated straight from the clock. `clip` reads it exactly like any
+ * track; the rig gave the generator-only track a unit duration, so `sniff(ms)`
+ * passes the raw clock through and the wave reads absolute time. It wanders the
+ * nose up and down forever, no trigger, no state.
+ */
+const sniff = clip(t.sniff!);
 
 const unit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
 
@@ -58,23 +62,15 @@ let gazeY = 0;
 let last = 0;
 
 /**
- * The whole frame, as a pure function of the clock and the gaze. Folding a
- * time-driven track (`blink`) in with two variable-driven blendspaces
- * (`lookX`, `lookY`) is just one `mix` — layers over disjoint channels, so each
- * lands where it belongs and nothing fights.
+ * The whole frame, as a pure function of the clock and the gaze: the blink, the
+ * heart, the sniff, and the two gaze blendspaces all voting into one `mix`, each
+ * placed on its own input. Each writes its own channels — lid scale, eye shape
+ * and colour, nose offset, gaze offset — so none can override another; they just
+ * compose. A blooming heart still blinks, and the nose sniffs throughout.
  */
 function render(ms: number): void {
   last = ms;
-  const love = surge(ms);
-  view.render(
-    mix(
-      [blink(ms), 1 - love],
-      [openEyes, love],
-      heart(love),
-      lookX(gazeX),
-      lookY(gazeY),
-    ),
-  );
+  view.render(mix(blink(ms), heart(ms), sniff(ms), lookX(gazeX), lookY(gazeY)));
   clock.textContent = `${Math.round(ms)} ms`;
 }
 
@@ -90,7 +86,7 @@ stage.addEventListener("pointerleave", () => {
   render(last);
 });
 const react = (): void => {
-  pop = last;
+  heart = place(morph, { offset: last, scale: BLOOM }); // move the origin to now
 };
 loveBtn.addEventListener("click", react);
 stage.addEventListener("click", react);

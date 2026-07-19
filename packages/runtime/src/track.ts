@@ -1,9 +1,23 @@
 import { type Pose, type Value } from "./pose";
+import { linear, type Ease } from "./ease";
+import { type Generator } from "./generator";
 
-/** One channel's keyframes: parallel, time-sorted arrays. */
+/**
+ * A channel is one thing: a time turned into a value. It arrives at that value
+ * one of two ways — from *stored* keyframes (parallel, time-sorted arrays, with
+ * an optional easing per key bending the segment leaving it), or from a *pure
+ * function* of time (`fn`, a procedural generator). Same seam, so everything
+ * above — sampling, wrapping, placing, blending — is oblivious to which it is.
+ *
+ * A `fn` channel votes every frame (a wave has no edges); a keyframe channel
+ * abstains outside its bracket. When `fn` is present the keyframe arrays are
+ * ignored, so a generator carries empty ones.
+ */
 export interface Channel {
   readonly times: readonly number[];
   readonly values: readonly Value[];
+  readonly eases?: readonly Ease[];
+  readonly fn?: Generator;
 }
 
 /**
@@ -27,12 +41,17 @@ const lerp = (a: Value, b: Value, f: number): Value =>
     : (a as readonly number[]).map((av, k) => av + ((b as readonly number[])[k]! - av) * f);
 
 /**
- * Sample one channel at an absolute time. Returns `undefined` when the time
- * falls outside the channel's keys — the channel then abstains from the blend
- * (no-vote), rather than holding its last value. Contribution requires a
- * bracket, always.
+ * Sample one channel at an absolute time. A `fn` channel just evaluates its
+ * generator (always a vote). A keyframe channel returns `undefined` when the
+ * time falls outside its keys — abstaining from the blend (no-vote) rather than
+ * holding its last value. Contribution requires a bracket, always.
+ *
+ * Exported because a knob is nothing but a scalar channel: the generator layer
+ * samples a keyframe-list knob through this very seam (clamping the time into
+ * the bracket first, since a knob must always have a value to give).
  */
-const at = (ch: Channel, t: number): Value | undefined => {
+export const at = (ch: Channel, t: number): Value | undefined => {
+  if (ch.fn) return ch.fn(t);
   const { times, values } = ch;
   const n = times.length;
   if (n === 0 || t < times[0]! || t > times[n - 1]!) return undefined;
@@ -43,7 +62,9 @@ const at = (ch: Channel, t: number): Value | undefined => {
   const v0 = values[i]!;
   const v1 = values[i + 1] ?? v0;
   const span = t1 - t0;
-  return span === 0 ? v0 : lerp(v0, v1, (t - t0) / span);
+  if (span === 0) return v0;
+  const ease = ch.eases?.[i] ?? linear;
+  return lerp(v0, v1, ease((t - t0) / span));
 };
 
 /**

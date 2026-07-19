@@ -1,15 +1,108 @@
 import { type Bone, type Skeleton } from "./skeleton";
 import { bindSkin, type Skin, type SkinMap } from "./skin";
 import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
+import { parseAttr, type Attr } from "./attr";
 import { type Pose } from "./pose";
-import { type Channel, type Track } from "./track";
+import { at, type Channel, type Track } from "./track";
+import { segment, type Ease, type Handle } from "./ease";
+import { generators, type Env, type Knob } from "./generator";
 import { interpolate } from "polymorph-js";
 
-interface TrackData {
-  readonly channels: Readonly<
-    Record<string, { readonly keys: Readonly<Record<string, number | string>> }>
-  >;
+/**
+ * A keyframe as authored: a bare value (linear), or a value wearing Bézier
+ * handles — `in` shaping how the tween arrives *at* this key, `out` how it
+ * *leaves* toward the next. A segment's curve is the left key's `out` meeting
+ * the right key's `in`; omit them and it is piecewise linear.
+ */
+interface KeyData {
+  readonly value: number | string;
+  readonly in?: Handle;
+  readonly out?: Handle;
 }
+type KeyVal = number | string | KeyData;
+
+/**
+ * A knob as authored: a bare constant, or — because a knob is just a channel —
+ * a nested channel spec that varies it over time. So a wave's `amp` may be a
+ * number, another wave, or a key list, and *that* wave's knobs may in turn be
+ * anything, arbitrarily deep. Composition is nothing but this recursion.
+ */
+type KnobData = number | ChannelData;
+
+/** The four modulatable knobs of a generator, each an authored knob. */
+interface KnobEnv {
+  readonly bias?: KnobData;
+  readonly amp?: KnobData;
+  readonly phase?: KnobData;
+  readonly freq?: KnobData;
+}
+
+/**
+ * A channel as authored: either a bag of `keys` (stored keyframes) or a `fn`
+ * naming a generator plus its (modulatable) knobs (a procedural wave). One or
+ * the other — the runtime samples both through the same seam.
+ */
+type ChannelData =
+  | { readonly keys: Readonly<Record<string, KeyVal>> }
+  | ({ readonly fn: string } & KnobEnv);
+
+interface TrackData {
+  readonly channels: Readonly<Record<string, ChannelData>>;
+}
+
+/** One key, unwrapped to its value and (optional) handles. */
+const key = (raw: KeyVal): KeyData => (typeof raw === "object" ? raw : { value: raw });
+
+/** The eases of a key list, one per segment: each key's `out` meets the next's `in`. */
+const easesOf = (keys: readonly { in?: Handle; out?: Handle }[]): Ease[] =>
+  keys.slice(0, -1).map((k, i) => segment(k.out, keys[i + 1]!.in));
+
+/** A key record, unwrapped to time-sorted entries (value plus its handles). */
+const entriesOf = (keys: Readonly<Record<string, KeyVal>>) =>
+  Object.keys(keys)
+    .map((k) => {
+      const kd = key(keys[k]!);
+      return { t: Number(k), v: kd.value, in: kd.in, out: kd.out };
+    })
+    .sort((a, b) => a.t - b.t);
+
+/**
+ * Build one authored knob into a live one — a function of time. A constant
+ * folds to a function that ignores its argument; a wave or a key list recurse
+ * through the very same builders the top level uses, because a knob is just a
+ * channel. A key-list knob is *clamped* to its end values (a wave needs a
+ * number at every instant; unlike a pose channel it cannot abstain), and rides
+ * the same eased interpolation as any keyframe channel.
+ */
+const buildKnob = (k: KnobData): Knob => {
+  if (typeof k === "number") return () => k;
+  if ("fn" in k) return buildGen(k);
+  const e = entriesOf(k.keys);
+  if (e.some((x) => typeof x.v !== "number"))
+    throw new Error(`articul8: a knob key list must be numeric`);
+  const ch: Channel = { times: e.map((x) => x.t), values: e.map((x) => x.v as number), eases: easesOf(e) };
+  const lo = ch.times[0]!;
+  const hi = ch.times[ch.times.length - 1]!;
+  return (t) => at(ch, Math.max(lo, Math.min(hi, t))) as number;
+};
+
+/**
+ * Build a procedural wave: look up the named leaf and hand it an envelope whose
+ * knobs are each built (present ones only — an omitted knob keeps the leaf's
+ * identity default). Mutually recursive with `buildKnob`, so a knob may be yet
+ * another wave, nested to any depth.
+ */
+const buildGen = (cd: { fn: string } & KnobEnv): Knob => {
+  const make = generators[cd.fn];
+  if (!make) throw new Error(`articul8: no generator "${cd.fn}"`);
+  const env: Env = {
+    bias: cd.bias === undefined ? undefined : buildKnob(cd.bias),
+    amp: cd.amp === undefined ? undefined : buildKnob(cd.amp),
+    phase: cd.phase === undefined ? undefined : buildKnob(cd.phase),
+    freq: cd.freq === undefined ? undefined : buildKnob(cd.freq),
+  };
+  return make(env);
+};
 
 /**
  * The rig: a skeleton, its skin, and named animations — the art itself lives
@@ -26,10 +119,22 @@ export interface RigData {
 export interface Rig {
   readonly skeleton: Skeleton;
   readonly tracks: Readonly<Record<string, Track>>;
-  /** Headless: bind to an SVG document's text, get back a pose→`d` evaluator. */
-  bind(svg: string): Skin;
+  /** Headless: bind to an SVG document's text, get back a pose→art evaluator. */
+  bind(svg: string): Puppet;
   /** Live: inject the art into a parent element and drive it with poses. */
   bind(parent: Element, svg: string): View;
+}
+
+/** A value string, ready to write to an attribute. */
+export type Attrs = Readonly<Record<string, string>>;
+
+/**
+ * A bound rig: geometry (`pose`, the skin) and paint (`paint`, every other
+ * attribute) read the *same* sparse pose through disjoint channels. The skin
+ * claims a path's `d`; the painter claims `object.attr` for every other `attr`.
+ */
+export interface Puppet extends Skin {
+  paint(pose: Pose): Map<number, Attrs>;
 }
 
 /** A mounted rig: hand it a pose, it moves the SVG already on the page. */
@@ -82,23 +187,63 @@ const reconcile = (from: string, to: string): [base: string, morphed: string] =>
  */
 interface Morph {
   readonly channels: Record<string, Channel>; // the track's own bag, filled at bind
-  readonly key: string; // the object this shape key drives
-  readonly base?: string; // an explicit rest path, referenced at weight 0
-  readonly time: number; // the weight at which the target is reached
-  readonly target: string; // the referenced target path
+  readonly key: string; // the object this shape channel drives
+  readonly times: readonly number[]; // keyframe times
+  readonly refs: readonly string[]; // per key: the object it becomes (self = rest)
+  readonly eases: readonly Ease[]; // per segment
+}
+
+/**
+ * A paint channel drives one presentation attribute of one object — `eyeR.fill`,
+ * `halo.opacity`. Like a morph, its keys are resolved at bind: a literal value,
+ * or a reference to another object's *same* attribute (property-directed sugar).
+ * Its rest is the object's authored attribute if it has one, else the channel
+ * must supply an explicit key at weight 0.
+ */
+interface Paint {
+  readonly channels: Record<string, Channel>; // the track's own bag, filled at bind
+  readonly key: string; // the pose channel, e.g. "eyeR.fill"
+  readonly obj: string; // the object it paints, e.g. "eyeR"
+  readonly attr: string; // the attribute it drives, e.g. "fill"
+  readonly entries: { t: number; v: number | string; in?: Handle; out?: Handle }[];
 }
 
 const path = /<path\b[^>]*\bd="([^"]*)"[^>]*>/gi;
-const idOf = /\bid="([^"]*)"/;
+const attr = /([\w:-]+)\s*=\s*"([^"]*)"/g;
 
-/** Paths in document order, with their ids — the skin's addressing space. */
-const scan = (svg: string): { d: string; id?: string }[] => {
-  const found: { d: string; id?: string }[] = [];
+/** One object: its geometry, id, and a reader for any authored attribute. */
+interface Obj {
+  readonly d: string;
+  readonly id?: string;
+  readonly attr: (name: string) => string | undefined;
+}
+
+/** Split an inline `style="a:1;b:2"` into a lookup. */
+const declrs = (style: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const part of style.split(";")) {
+    const k = part.indexOf(":");
+    if (k > 0) out[part.slice(0, k).trim()] = part.slice(k + 1).trim();
+  }
+  return out;
+};
+
+/** Paths in document order — the skin's addressing space, plus their attrs. */
+const scan = (svg: string): Obj[] => {
+  const found: Obj[] = [];
   let m: RegExpExecArray | null;
   path.lastIndex = 0;
   while ((m = path.exec(svg))) {
-    const id = idOf.exec(m[0]);
-    found.push(id ? { d: m[1]!, id: id[1]! } : { d: m[1]! });
+    const map: Record<string, string> = {};
+    let a: RegExpExecArray | null;
+    attr.lastIndex = 0;
+    while ((a = attr.exec(m[0]!))) map[a[1]!] = a[2]!;
+    const style = map["style"] ? declrs(map["style"]) : {};
+    found.push({
+      d: m[1]!,
+      id: map["id"],
+      attr: (name) => style[name] ?? map[name], // inline style wins, like the DOM
+    });
   }
   return found;
 };
@@ -107,65 +252,157 @@ export function rig(data: RigData): Rig {
   const skeleton: Skeleton = data.bones ?? {};
   const tracks: Record<string, Track> = {};
   const morphs: Morph[] = [];
+  const paints: Paint[] = [];
 
   for (const name in data.animation) {
     const channels: Record<string, Channel> = {};
     let duration = 0;
     const src = data.animation[name]!.channels;
     for (const c in src) {
-      const entries = Object.keys(src[c]!.keys)
-        .map((k) => ({ t: Number(k), v: src[c]!.keys[k]! }))
-        .sort((a, b) => a.t - b.t);
+      const cd = src[c]!;
 
-      // A string value is a morph: it references the path this channel becomes.
+      // A `fn` channel is a procedural wave, not stored keys: build the named
+      // generator (its knobs may themselves be waves or key lists) and let it
+      // vote every frame. Such a channel has no span of its own, so it lends the
+      // track a unit duration — then a `sample(track, u)` passes the clock
+      // straight through as `t = u·1`, and the wave reads absolute time exactly
+      // as authored (freq in real Hz).
+      if ("fn" in cd) {
+        channels[c] = { times: [], values: [], fn: buildGen(cd) };
+        duration = Math.max(duration, 1);
+        continue;
+      }
+
+      const entries = entriesOf(cd.keys);
+
+      const dot = c.indexOf(".");
+      const prop = dot >= 0 ? c.slice(dot + 1) : "";
+      const transform =
+        prop === "x" || prop === "y" || prop === "rotation" || prop === "sx" || prop === "sy";
+
+      // A dotted, non-transform channel paints an attribute — fill, opacity,
+      // stroke-width. Its keys are literals or references, resolved at bind
+      // (against the art), exactly like a morph. The skeleton never sees it.
+      if (dot >= 0 && !transform) {
+        channels[c] = { times: [], values: [] }; // placeholder, resolved at bind
+        paints.push({ channels, key: c, obj: c.slice(0, dot), attr: prop, entries });
+        duration = Math.max(duration, entries[entries.length - 1]?.t ?? 0);
+        continue;
+      }
+
+      // A bare string value is a morph: each key names the path this channel
+      // *becomes* — the driven object itself (rest) or a target in the SVG. It
+      // plays as a clip, so a lone target key gets an implicit rest at 0 (the
+      // object naming itself), exactly like a paint channel's implicit key 0.
       if (entries.some((e) => typeof e.v === "string")) {
         if (entries.some((e) => typeof e.v !== "string"))
           throw new Error(`articul8: channel "${c}" mixes geometry and scalar keys`);
-        const geo = entries as { t: number; v: string }[];
-        const rest = geo[0]!.t === 0 && geo.length > 1 ? geo[0]! : undefined;
-        const shots = rest ? geo.slice(1) : geo;
-        if (shots.length !== 1)
-          throw new Error(`articul8: morph channel "${c}" needs exactly one target (for now)`);
+        const geo = entries as { t: number; v: string; in?: Handle; out?: Handle }[];
+        if (geo[0]!.t !== 0) geo.unshift({ t: 0, v: c }); // rest at 0 = self-reference
         channels[c] = { times: [], values: [] }; // placeholder, resolved at bind
-        morphs.push({ channels, key: c, base: rest?.v, time: shots[0]!.t, target: shots[0]!.v });
-        duration = Math.max(duration, shots[0]!.t);
+        morphs.push({
+          channels,
+          key: c,
+          times: geo.map((e) => e.t),
+          refs: geo.map((e) => e.v),
+          eases: easesOf(geo),
+        });
+        duration = Math.max(duration, geo[geo.length - 1]!.t);
         continue;
       }
 
       const times = entries.map((e) => e.t);
-      channels[c] = { times, values: entries.map((e) => e.v as number) };
+      channels[c] = { times, values: entries.map((e) => e.v as number), eases: easesOf(entries) };
       duration = Math.max(duration, times[times.length - 1] ?? 0);
     }
     tracks[name] = { duration, channels };
   }
 
-  const bindEls = (els: { d: string; id?: string }[]): Skin => {
+  const bindEls = (els: Obj[]): Puppet => {
     const ids: Record<string, number> = {};
     els.forEach((e, i) => {
       if (e.id) ids[e.id] = i;
     });
     const ref = (s: string): number => {
       const i = /^\d+$/.test(s) ? Number(s) : ids[s];
-      if (i === undefined || !els[i]) throw new Error(`articul8: morph "${s}" names no object`);
+      if (i === undefined || !els[i]) throw new Error(`articul8: "${s}" names no object`);
       return i;
     };
+    const known = (s: string): boolean => (/^\d+$/.test(s) ? !!els[Number(s)] : s in ids);
 
     // Resolve each shape key against the art it drives: `polymorph` reconciles
     // the driven path and its target to one topology, and the driven object
     // rebinds to that base — so the skin and the morph ride one point vector.
     for (const mo of morphs) {
       const i = ref(mo.key);
-      const [base, morphed] = reconcile(mo.base ? els[ref(mo.base)]!.d : els[i]!.d, els[ref(mo.target)]!.d);
-      mo.channels[mo.key] = { times: [0, mo.time], values: [flat(parsePath(base)), flat(parsePath(morphed))] };
+      // Every key names an object: the driven object itself (rest) or the one
+      // distinct target it blooms to. Reconcile self↔target once, to a shared
+      // topology; then each key rides that vector — rest→base, target→morphed.
+      const targets = [...new Set(mo.refs.filter((r) => ref(r) !== i))];
+      if (targets.length > 1)
+        throw new Error(`articul8: morph channel "${mo.key}" blooms to ${targets.length} targets (one for now)`);
+      const [base, morphed] = targets.length
+        ? reconcile(els[i]!.d, els[ref(targets[0]!)]!.d)
+        : [els[i]!.d, els[i]!.d];
+      const rest = flat(parsePath(base));
+      const target = flat(parsePath(morphed));
+      mo.channels[mo.key] = {
+        times: mo.times,
+        values: mo.refs.map((r) => (ref(r) === i ? rest : target)),
+        eases: mo.eases,
+      };
       els[i] = { ...els[i]!, d: base };
+    }
+
+    // Resolve each paint channel the same way: read its object's authored value
+    // as rest, then each key as a literal or a reference to another object's
+    // *same* attribute. The codec turns every value into one number vector plus
+    // a `render` closure that writes it back in the value's own shape.
+    interface PB {
+      readonly i: number;
+      readonly key: string;
+      readonly attr: string;
+      readonly render: Attr["render"];
+    }
+    const painters: PB[] = [];
+    for (const pa of paints) {
+      const i = ref(pa.obj);
+      const authored = els[i]!.attr(pa.attr);
+      let render: Attr["render"] | undefined = authored !== undefined ? parseAttr(authored).render : undefined;
+      const times: number[] = [];
+      const values: number[][] = [];
+      const handles: { in?: Handle; out?: Handle }[] = [];
+      const add = (t: number, raw: number | string, h: { in?: Handle; out?: Handle }): void => {
+        const src = typeof raw === "string" && known(raw) ? els[ref(raw)]!.attr(pa.attr) : String(raw);
+        if (src === undefined)
+          throw new Error(`articul8: "${raw}" has no ${pa.attr} for "${pa.key}" to wear`);
+        const a = parseAttr(src);
+        render ??= a.render;
+        times.push(t);
+        values.push([...a.nums]);
+        handles.push(h);
+      };
+      if (pa.entries[0]!.t !== 0) {
+        if (authored === undefined)
+          throw new Error(`articul8: paint channel "${pa.key}" needs a key at 0 (no authored ${pa.attr})`);
+        add(0, authored, {}); // implicit rest key — linear on both sides
+      }
+      for (const e of pa.entries) add(e.t, e.v, { in: e.in, out: e.out });
+      const len = values[0]!.length;
+      if (values.some((v) => v.length !== len))
+        throw new Error(`articul8: paint channel "${pa.key}" mixes value shapes`);
+      pa.channels[pa.key] = { times, values, eases: easesOf(handles) };
+      painters.push({ i, key: pa.key, attr: pa.attr, render: render! });
     }
 
     const parsed = els.map((e) => parsePath(e.d));
 
     // Reconciliation guarantees a geometry channel carries exactly its object's
     // point vector; assert it, so a future change can't silently break skinning.
+    // Dotted channels are paint, not geometry — they name no path, so skip them.
     for (const name in tracks)
       for (const c in tracks[name]!.channels) {
+        if (c.includes(".")) continue;
         const v0 = tracks[name]!.channels[c]!.values[0];
         if (!Array.isArray(v0)) continue;
         const need = parsed[ref(c)]!.points.length * 2;
@@ -173,22 +410,40 @@ export function rig(data: RigData): Rig {
           throw new Error(`articul8: morph channel "${c}" has ${v0.length} coords, object needs ${need}`);
       }
 
-    return bindSkin(skeleton, data.skin ?? {}, parsed, ids);
+    const geo = bindSkin(skeleton, data.skin ?? {}, parsed, ids);
+    const paint = (pose: Pose): Map<number, Attrs> => {
+      const out = new Map<number, Record<string, string>>();
+      for (const p of painters) {
+        const v = pose[p.key];
+        if (v === undefined) continue; // abstaining channel → keep authored value
+        const group = out.get(p.i) ?? {};
+        group[p.attr] = p.render(typeof v === "number" ? [v] : v);
+        out.set(p.i, group);
+      }
+      return out;
+    };
+    return { pose: (pose) => geo.pose(pose), paint };
   };
 
-  function bind(svg: string): Skin;
+  function bind(svg: string): Puppet;
   function bind(parent: Element, svg: string): View;
-  function bind(a: string | Element, svg?: string): Skin | View {
+  function bind(a: string | Element, svg?: string): Puppet | View {
     if (typeof a === "string") return bindEls(scan(a));
     a.innerHTML = svg!;
     const nodes = [...a.querySelectorAll<SVGPathElement>("path")];
-    const skin = bindEls(nodes.map((n) => ({ d: n.getAttribute("d") ?? "", id: n.id || undefined })));
-    for (const [i, d] of skin.pose({})) nodes[i]!.setAttribute("d", d); // paint the reconciled rest
-    return {
-      render(pose: Pose): void {
-        for (const [i, d] of skin.pose(pose)) nodes[i]!.setAttribute("d", d);
-      },
+    const puppet = bindEls(
+      nodes.map((n) => ({
+        d: n.getAttribute("d") ?? "",
+        id: n.id || undefined,
+        attr: (name) => n.getAttribute(name) ?? (n.style.getPropertyValue(name) || undefined),
+      })),
+    );
+    const draw = (pose: Pose): void => {
+      for (const [i, d] of puppet.pose(pose)) nodes[i]!.setAttribute("d", d);
+      for (const [i, at] of puppet.paint(pose)) for (const k in at) nodes[i]!.setAttribute(k, at[k]!);
     };
+    draw({}); // paint the reconciled rest + any driven attrs at pose 0
+    return { render: (pose) => draw(pose) };
   }
 
   return { skeleton, tracks, bind };
