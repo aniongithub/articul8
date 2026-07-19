@@ -48,4 +48,25 @@ describe("sample", () => {
     expect(sample(held, 5000)["head.rotation"]).toBeCloseTo(10);
     expect(sample(held, -5000)["head.rotation"]).toBeCloseTo(-10);
   });
+
+  it("a coord controller supplies the clock; a keyframe channel reads through it", () => {
+    // The controller remaps the real time to a click-relative one — here it just
+    // offsets by 500 ms, so the track reads as if the clock were `t - 500`.
+    const clicked: Track = { ...sway, coord: (t) => t - 500 };
+    expect(sample(clicked, 500)["head.rotation"]).toBeCloseTo(-10); // u = 0
+    expect(sample(clicked, 1500)["head.rotation"]).toBeCloseTo(10); // u = 1000
+  });
+
+  it("wrap still trims the coord the controller supplies", () => {
+    // The controller hands back a time past the span; the track's own wrap tiles
+    // it — so timing (controller) and edge behaviour (wrap) compose orthogonally.
+    const looped: Track = { ...sway, wrap: loop, coord: (t) => t + 1000 };
+    const ref = sample(sway, 250)["head.rotation"] as number;
+    expect(sample(looped, 250)["head.rotation"]).toBeCloseTo(ref);
+  });
+
+  it("a controller abstains with undefined; the whole track casts no vote", () => {
+    const gated: Track = { ...sway, coord: () => undefined };
+    expect("head.rotation" in sample(gated, 250)).toBe(false);
+  });
 });

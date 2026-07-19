@@ -2,8 +2,9 @@ import { type Bone, type Skeleton } from "./skeleton";
 import { bindSkin, type Skin, type SkinMap } from "./skin";
 import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
 import { parseAttr, type Attr } from "./attr";
-import { type Pose } from "./pose";
-import { at, type Channel, type Track, type Wrap, hold, clamp, loop, pingpong } from "./track";
+import { blend, type Pose } from "./pose";
+import { at, type Channel, type Track, type Wrap, type Controller, hold, clamp, loop, pingpong } from "./track";
+import { clip, type Anim } from "./layer";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
 import { interpolate } from "polymorph-js";
@@ -53,7 +54,29 @@ interface TrackData {
   readonly channels: Readonly<Record<string, ChannelData>>;
   /** What a time past this track's span means — defaults to `hold` (abstain). */
   readonly wrap?: string;
+  /** A controller that supplies this track's clock — a click, a cursor, a spring.
+   *  Named here, resolved at bind against the user's `controllers` map. */
+  readonly controller?: string;
 }
+
+/**
+ * An interior node — combinators as data. It names other nodes to fan in (`mix`,
+ * by name) and a controller to weight them (`by`, one fader per input). At every
+ * frame the controller hands back a `{ input → weight }` map and the node folds
+ * the sampled inputs through the one `blend` primitive. It never inspects what an
+ * input *carries*: crossfading eye positions, opacity across two shapes, or a
+ * geometry morph are the same call — the weights are per-*input*, never per-
+ * channel. The rule is tight: the map's keys must be exactly the `mix` names, no
+ * scalar shorthand, N inputs ⇒ N faders. The controller may abstain (`undefined`)
+ * and the whole node casts no vote, exactly like a keyframe past its edge.
+ */
+interface MixData {
+  readonly mix: readonly string[];
+  readonly by: string;
+}
+
+/** A named animation is a leaf (keyframes/generator) or an interior mix node. */
+type NodeData = TrackData | MixData;
 
 /** One key, unwrapped to its value and (optional) handles. */
 const key = (raw: KeyVal): KeyData => (typeof raw === "object" ? raw : { value: raw });
@@ -118,12 +141,30 @@ export interface RigData {
   readonly svg?: string;
   readonly bones?: Readonly<Record<string, Bone>>;
   readonly skin?: SkinMap;
-  readonly animation?: Readonly<Record<string, TrackData>>;
+  readonly animation?: Readonly<Record<string, NodeData>>;
+}
+
+/**
+ * The impure leaves, supplied by the host: a name → a `t → value` closure that
+ * may read live state (a click, the cursor) and abstain with `undefined`. This
+ * is the *only* place the outside world enters — the same resolver a track's
+ * `controller` names for its clock, and the same map a caller threads by hand
+ * into a blendspace coordinate. Provision is uniform; only who reads it varies.
+ */
+export type Controllers = Readonly<Record<string, Controller>>;
+
+/** Host-supplied bindings for a rig: the controllers its JSON names. */
+export interface RigOptions {
+  readonly controllers?: Controllers;
 }
 
 export interface Rig {
   readonly skeleton: Skeleton;
   readonly tracks: Readonly<Record<string, Track>>;
+  /** Every named animation as a ready lambda — a leaf track read as a clip, or an
+   *  interior `mix` node folded through its controller. This is the play API: the
+   *  caller threads the clock (`anims.lookAt(ms)`) and blends the results. */
+  readonly anims: Readonly<Record<string, Anim>>;
   /** Headless: bind to an SVG document's text, get back a pose→art evaluator. */
   bind(svg: string): Puppet;
   /** Live: inject the art into a parent element and drive it with poses. */
@@ -253,16 +294,18 @@ const scan = (svg: string): Obj[] => {
   return found;
 };
 
-export function rig(data: RigData): Rig {
+export function rig(data: RigData, opts: RigOptions = {}): Rig {
   const skeleton: Skeleton = data.bones ?? {};
   const tracks: Record<string, Track> = {};
   const morphs: Morph[] = [];
   const paints: Paint[] = [];
 
   for (const name in data.animation) {
+    const node = data.animation[name]!;
+    if ("mix" in node) continue; // an interior node carries no channels — built below
     const channels: Record<string, Channel> = {};
     let duration = 0;
-    const src = data.animation[name]!.channels;
+    const src = node.channels;
     for (const c in src) {
       const cd = src[c]!;
 
@@ -319,14 +362,59 @@ export function rig(data: RigData): Rig {
       channels[c] = { times, values: entries.map((e) => e.v as number), eases: easesOf(entries) };
       duration = Math.max(duration, times[times.length - 1] ?? 0);
     }
-    const td = data.animation[name]!;
     let wrap: Wrap | undefined;
-    if (td.wrap) {
-      wrap = wraps[td.wrap];
-      if (!wrap) throw new Error(`articul8: track "${name}" names no wrap "${td.wrap}"`);
+    if (node.wrap) {
+      wrap = wraps[node.wrap];
+      if (!wrap) throw new Error(`articul8: track "${name}" names no wrap "${node.wrap}"`);
     }
-    tracks[name] = { duration, channels, wrap };
+    let coord: Controller | undefined;
+    if (node.controller) {
+      coord = opts.controllers?.[node.controller];
+      if (!coord) throw new Error(`articul8: track "${name}" names no controller "${node.controller}"`);
+    }
+    tracks[name] = { duration, channels, wrap, coord };
   }
+
+  /**
+   * The animation graph as ready lambdas. A leaf is just its track read as a
+   * clip; an interior `mix` node fans in its named inputs and folds them through
+   * its controller. `resolve` builds lazily and memoises, so a node names its
+   * children by string and the wiring is order-free (and cycles are caught). The
+   * node is oblivious to what its inputs carry — it only ever calls `blend`.
+   */
+  const anims: Record<string, Anim> = {};
+  const building = new Set<string>();
+  const resolve = (name: string): Anim => {
+    if (anims[name]) return anims[name]!;
+    const node = data.animation?.[name];
+    if (!node) throw new Error(`articul8: node "${name}" not found`);
+    if (building.has(name)) throw new Error(`articul8: node "${name}" is cyclic`);
+    building.add(name);
+    let anim: Anim;
+    if ("mix" in node) {
+      const inputs = node.mix;
+      const set = new Set(inputs);
+      const children = inputs.map(resolve); // may name leaves or other mix nodes
+      const by = opts.controllers?.[node.by];
+      if (!by) throw new Error(`articul8: node "${name}" names no controller "${node.by}"`);
+      anim = (t) => {
+        const w = by(t);
+        if (w === undefined) return {}; // the controller abstains → the node abstains
+        if (typeof w === "number")
+          throw new Error(`articul8: controller "${node.by}" must return per-input weights, not a scalar`);
+        for (const k in w)
+          if (!set.has(k)) throw new Error(`articul8: controller "${node.by}" weights unknown input "${k}" of node "${name}"`);
+        for (const k of inputs)
+          if (!(k in w)) throw new Error(`articul8: controller "${node.by}" omits weight for input "${k}" of node "${name}"`);
+        return blend(children.map((c) => c(t)), inputs.map((k) => w[k]!));
+      };
+    } else {
+      anim = clip(tracks[name]!);
+    }
+    building.delete(name);
+    return (anims[name] = anim);
+  };
+  for (const name in data.animation) resolve(name);
 
   const bindEls = (els: Obj[]): Puppet => {
     const ids: Record<string, number> = {};
@@ -456,5 +544,5 @@ export function rig(data: RigData): Rig {
     return { render: (pose) => draw(pose) };
   }
 
-  return { skeleton, tracks, bind };
+  return { skeleton, tracks, anims, bind };
 }

@@ -70,71 +70,57 @@
         }
       }
     },
-    "lookRight": {
+    "eyes": {
+      "wrap": "clamp",
       "channels": {
-        "eyeR.x": {
-          "keys": {
-            "0": 65.359,
-            "1": 67.859
-          }
-        },
-        "eyeL.x": {
-          "keys": {
-            "0": 35.414,
-            "1": 37.914
-          }
-        }
+        "eyeR.x": { "keys": { "0": 65.359 } },
+        "eyeL.x": { "keys": { "0": 35.414 } },
+        "eyeR.y": { "keys": { "0": 57.512 } },
+        "eyeL.y": { "keys": { "0": 57.512 } }
+      }
+    },
+    "lookRight": {
+      "wrap": "clamp",
+      "channels": {
+        "eyeR.x": { "keys": { "0": 67.859 } },
+        "eyeL.x": { "keys": { "0": 37.914 } },
+        "eyeR.y": { "keys": { "0": 57.512 } },
+        "eyeL.y": { "keys": { "0": 57.512 } }
       }
     },
     "lookLeft": {
+      "wrap": "clamp",
       "channels": {
-        "eyeR.x": {
-          "keys": {
-            "0": 65.359,
-            "1": 62.859
-          }
-        },
-        "eyeL.x": {
-          "keys": {
-            "0": 35.414,
-            "1": 32.914
-          }
-        }
+        "eyeR.x": { "keys": { "0": 62.859 } },
+        "eyeL.x": { "keys": { "0": 32.914 } },
+        "eyeR.y": { "keys": { "0": 57.512 } },
+        "eyeL.y": { "keys": { "0": 57.512 } }
       }
     },
     "lookDown": {
+      "wrap": "clamp",
       "channels": {
-        "eyeR.y": {
-          "keys": {
-            "0": 57.512,
-            "1": 60.312
-          }
-        },
-        "eyeL.y": {
-          "keys": {
-            "0": 57.512,
-            "1": 60.312
-          }
-        }
+        "eyeR.x": { "keys": { "0": 65.359 } },
+        "eyeL.x": { "keys": { "0": 35.414 } },
+        "eyeR.y": { "keys": { "0": 60.312 } },
+        "eyeL.y": { "keys": { "0": 60.312 } }
       }
     },
     "lookUp": {
+      "wrap": "clamp",
       "channels": {
-        "eyeR.y": {
-          "keys": {
-            "0": 57.512,
-            "1": 54.712
-          }
-        },
-        "eyeL.y": {
-          "keys": {
-            "0": 57.512,
-            "1": 54.712
-          }
-        }
+        "eyeR.x": { "keys": { "0": 65.359 } },
+        "eyeL.x": { "keys": { "0": 35.414 } },
+        "eyeR.y": { "keys": { "0": 54.712 } },
+        "eyeL.y": { "keys": { "0": 54.712 } }
       }
     },
+    "lookAt": {
+      "mix": ["eyes", "lookRight", "lookLeft", "lookDown", "lookUp"],
+      "by": "gaze"
+    },
     "morph": {
+      "controller": "heartClock",
       "wrap": "clamp",
       "channels": {
         "eyeR": {

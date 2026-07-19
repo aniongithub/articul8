@@ -47,16 +47,36 @@ export const pingpong: Wrap = (t, d = 1) => {
 };
 
 /**
+ * An impure leaf: a user closure bound at rig-build, how the outside world — the
+ * mouse, a click, a spring — enters an otherwise pure graph without the runtime
+ * ever seeing an event. `undefined` always means "abstain right now", and the
+ * channels or inputs it drives cast no vote (blink/rest shows through), exactly
+ * as a keyframe does past its edge. What a *present* value means is the socket's
+ * business — provision is uniform, consumption varies:
+ *   • a **coord** socket reads a `number`: the clock to sample a track at.
+ *   • a **by** socket reads a `{ input → weight }` map: one fader per mix input.
+ * The runtime can't tell any of these from a pure function; only the closure
+ * reaches out. One `controllers` map holds them all; each socket narrows.
+ */
+export type Controller = (
+  t: number,
+) => number | Readonly<Record<string, number>> | undefined;
+
+/**
  * A named animation: a bag of channels over a shared span, read in absolute
  * time. `duration` is the span's length; `wrap` says what a time beyond it means
- * (loop, clamp, …), defaulting to `hold` — abstain past the edges. Together they
- * make a keyframe track a total `t → value`, exactly like a generator: the
- * extent, and the rule past it.
+ * (loop, clamp, …), defaulting to `hold` — abstain past the edges. `coord`, when
+ * present, is a controller that *supplies the clock* for this track's keyframe
+ * channels — the click-relative bloom, a scrubbed cursor — replacing the raw
+ * time before `wrap` trims its edges; a generator channel ignores it and takes
+ * the real clock, being infinite already. Together they make a keyframe track a
+ * total `t → value`, exactly like a generator: the extent, and the rule past it.
  */
 export interface Track {
   readonly duration: number;
   readonly channels: Readonly<Record<string, Channel>>;
   readonly wrap?: Wrap;
+  readonly coord?: Controller;
 }
 
 /**
@@ -97,18 +117,30 @@ export const at = (ch: Channel, t: number): Value | undefined => {
 };
 
 /**
- * Sample a whole track at an absolute time `t` into a (sparse) pose. Keyframe
- * channels are read through the track's `wrap` (so a looping track tiles, a
- * clamping one holds its edges) while a generator channel takes the raw clock —
- * it is already infinite and owns no span to wrap. A channel that still lands
- * outside its keys abstains, leaving that slot to whoever else votes.
+ * Sample a whole track at an absolute time `t` into a (sparse) pose. A generator
+ * channel takes the raw clock — it is already infinite and owns no span. Every
+ * keyframe channel reads through the track's clock: its `coord` controller if
+ * one is bound (which may abstain, returning `undefined`, so the whole track
+ * casts no vote this frame), else `t` directly, then trimmed by `wrap` (so a
+ * looping track tiles, a clamping one holds its edges). A channel that still
+ * lands outside its keys abstains too, leaving that slot to whoever else votes.
  */
 export function sample(track: Track, t: number): Pose {
   const wrap = track.wrap ?? hold;
   const pose: Pose = {};
   for (const c in track.channels) {
     const ch = track.channels[c]!;
-    const v = at(ch, ch.fn ? t : wrap(t, track.duration));
+    if (ch.fn) {
+      const v = ch.fn(t); // a generator owns the clock: no coord, no wrap
+      if (v !== undefined) pose[c] = v;
+      continue;
+    }
+    const u = track.coord ? track.coord(t) : t;
+    if (u === undefined) continue; // the controller has no clock now → abstain
+    if (typeof u !== "number")
+      // a coord socket wants a clock; a weights map named here is a wiring error.
+      throw new Error("articul8: a track's coord controller must return a clock (number), not weights");
+    const v = at(ch, wrap(u, track.duration));
     if (v !== undefined) pose[c] = v;
   }
   return pose;
