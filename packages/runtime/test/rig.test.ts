@@ -36,7 +36,7 @@ describe("rig · skin (end to end)", () => {
 
   it("carries per-keyframe Bézier handles from JSON through to eased sampling", () => {
     const eased = rig({
-      animation: {
+      animations: {
         move: {
           channels: {
             // key 0 leaves slowly (out handle pulled flat), so the midpoint reads low
@@ -46,7 +46,7 @@ describe("rig · skin (end to end)", () => {
       },
     }).tracks["move"]!;
     const plain = rig({
-      animation: { move: { channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } },
+      animations: { move: { channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } },
     }).tracks["move"]!;
     expect(sample(eased, 0)["head.x"]).toBe(0);
     expect(sample(eased, 1000)["head.x"]).toBe(10);
@@ -59,7 +59,7 @@ describe("rig · skin (end to end)", () => {
     // remapping the clock (offset by 200 ms) enters an otherwise pure track.
     const track = rig(
       {
-        animation: {
+        animations: {
           move: { controller: "clock", channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } },
         },
       },
@@ -72,7 +72,7 @@ describe("rig · skin (end to end)", () => {
   it("throws when a track names a controller the host never supplied", () => {
     expect(() =>
       rig({
-        animation: { move: { controller: "missing", channels: { "head.x": { keys: { "0": 0 } } } } },
+        animations: { move: { controller: "missing", channels: { "head.x": { keys: { "0": 0 } } } } },
       }),
     ).toThrow(/controller "missing"/);
   });
@@ -84,7 +84,7 @@ describe("rig · skin (end to end)", () => {
 const fold = (w: Record<string, number> | undefined) =>
   rig(
     {
-      animation: {
+      animations: {
         lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
         hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
         blend: { mix: ["lo", "hi"], by: "w" },
@@ -110,7 +110,7 @@ describe("rig · mix node (combinators as data)", () => {
     // path names or inspects the channel; the crossfade is identical.
     const node = rig(
       {
-        animation: {
+        animations: {
           lo: { wrap: "clamp", channels: { "jaw.rotation": { keys: { "0": -20 } } } },
           hi: { wrap: "clamp", channels: { "jaw.rotation": { keys: { "0": 20 } } } },
           swing: { mix: ["lo", "hi"], by: "w" },
@@ -124,7 +124,7 @@ describe("rig · mix node (combinators as data)", () => {
   it("throws at build when a mix names an input that is no node", () => {
     expect(() =>
       rig(
-        { animation: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo", "ghost"], by: "w" } } },
+        { animations: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo", "ghost"], by: "w" } } },
         { controllers: { w: () => ({}) } },
       ),
     ).toThrow(/"ghost" not found/);
@@ -132,7 +132,7 @@ describe("rig · mix node (combinators as data)", () => {
 
   it("throws at build when a mix names a controller the host never supplied", () => {
     expect(() =>
-      rig({ animation: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo"], by: "gone" } } }),
+      rig({ animations: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo"], by: "gone" } } }),
     ).toThrow(/controller "gone"/);
   });
 
@@ -147,7 +147,7 @@ describe("rig · mix node (combinators as data)", () => {
   it("throws when the controller hands back a scalar instead of a weights map", () => {
     const scalar = rig(
       {
-        animation: {
+        animations: {
           lo: { channels: { "head.x": { keys: { "0": 0 } } } },
           hi: { channels: { "head.x": { keys: { "0": 10 } } } },
           blend: { mix: ["lo", "hi"], by: "w" },
@@ -156,5 +156,132 @@ describe("rig · mix node (combinators as data)", () => {
       { controllers: { w: () => 0.5 } },
     ).anims["blend"]!;
     expect(() => scalar(0)).toThrow(/per-input weights, not a scalar/);
+  });
+});
+
+// An axis channel is a mix's twin one currency down: its keys are *positions* on
+// a coordinate and each value names a whole animation, so reading it is the same
+// bracket + eased crossfade as a scalar keyframe track — only it blends poses.
+// Two held one-key clips at 0 and 10 make the slide legible along the coordinate.
+const slide = (x: number | undefined, wrap = "clamp") =>
+  rig(
+    {
+      animations: {
+        lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
+        hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
+        gait: { channels: { g: { over: "x", wrap, keys: { "0": "lo", "1": "hi" } } } },
+      },
+    },
+    { controllers: { x: () => x } },
+  ).anims["gait"]!;
+
+describe("rig · axis channel (a blendspace as keys over a coordinate)", () => {
+  it("folds the two neighbouring animations by the eased coordinate fraction", () => {
+    expect(slide(0)(0)["head.x"]).toBeCloseTo(0);
+    expect(slide(1)(0)["head.x"]).toBeCloseTo(10);
+    expect(slide(0.5)(0)["head.x"]).toBeCloseTo(5);
+    expect(slide(0.25)(0)["head.x"]).toBeCloseTo(2.5);
+  });
+
+  it("clamps hold the extremes past the key-position span", () => {
+    expect(slide(2)(0)["head.x"]).toBeCloseTo(10);
+    expect(slide(-1)(0)["head.x"]).toBeCloseTo(0);
+  });
+
+  it("hold abstains past the edge — the whole axis casts no vote", () => {
+    expect(slide(2, "hold")(0)).toEqual({});
+    expect(slide(-1, "hold")(0)).toEqual({});
+  });
+
+  it("abstains when the coordinate abstains (undefined → no vote)", () => {
+    expect(slide(undefined)(0)).toEqual({});
+  });
+
+  it("carries per-key Bézier handles into the crossfade", () => {
+    // key 0 leaves slowly (out handle pulled flat), so the midpoint reads low —
+    // the same easing law as a timed track, now bending a pose crossfade.
+    const eased = rig(
+      {
+        animations: {
+          lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
+          hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
+          gait: { channels: { g: { over: "x", keys: { "0": { value: "lo", out: [0.9, 0] }, "1": "hi" } } } },
+        },
+      },
+      { controllers: { x: () => 0.5 } },
+    ).anims["gait"]!;
+    expect((eased(0)["head.x"] as number)).toBeLessThan(5);
+  });
+
+  it("is pose-valued: one axis channel drives a whole bag of slots", () => {
+    const two = rig(
+      {
+        animations: {
+          rest: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } }, "head.y": { keys: { "0": 0 } } } },
+          out: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } }, "head.y": { keys: { "0": 20 } } } },
+          reach: { channels: { g: { over: "x", wrap: "clamp", keys: { "0": "rest", "1": "out" } } } },
+        },
+      },
+      { controllers: { x: () => 0.5 } },
+    ).anims["reach"]!;
+    const p = two(0);
+    expect(p["head.x"]).toBeCloseTo(5);
+    expect(p["head.y"]).toBeCloseTo(10);
+  });
+
+  it("throws at build when an axis names a controller the host never supplied", () => {
+    expect(() =>
+      rig({
+        animations: {
+          lo: { channels: { "head.x": { keys: { "0": 0 } } } },
+          gait: { channels: { g: { over: "gone", keys: { "0": "lo" } } } },
+        },
+      }),
+    ).toThrow(/axis channel "g".*controller "gone"/);
+  });
+
+  it("throws at build when an axis key names no node", () => {
+    expect(() =>
+      rig(
+        { animations: { gait: { channels: { g: { over: "x", keys: { "0": "ghost" } } } } } },
+        { controllers: { x: () => 0 } },
+      ),
+    ).toThrow(/"ghost" not found/);
+  });
+
+  it("throws when the coordinate hands back a weights map instead of a scalar", () => {
+    const bad = rig(
+      {
+        animations: {
+          lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
+          hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
+          gait: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
+        },
+      },
+      { controllers: { x: () => ({ lo: 1 }) as unknown as number } },
+    ).anims["gait"]!;
+    expect(() => bad(0)).toThrow(/coordinate \(number\), not weights/);
+  });
+
+  it("rejects two channels of one track that drive the same slot (overlap needs `by`)", () => {
+    // Two axes both reaching `head.x` is an unresolved fight — the model demands
+    // an explicit `mix`/`by` to weight it, and load catches the collision.
+    expect(() =>
+      rig(
+        {
+          animations: {
+            a: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
+            b: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
+            clash: {
+              channels: {
+                one: { over: "x", keys: { "0": "a", "1": "b" } },
+                two: { over: "y", keys: { "0": "a", "1": "b" } },
+              },
+            },
+          },
+        },
+        { controllers: { x: () => 0, y: () => 0 } },
+      ),
+    ).toThrow(/both drive "head.x".*explicit `mix`/);
   });
 });

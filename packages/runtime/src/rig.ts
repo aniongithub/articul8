@@ -3,7 +3,7 @@ import { bindSkin, type Skin, type SkinMap } from "./skin";
 import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
 import { parseAttr, type Attr } from "./attr";
 import { blend, type Pose } from "./pose";
-import { at, type Channel, type Track, type Wrap, type Controller, hold, clamp, loop, pingpong } from "./track";
+import { at, type Channel, type Track, type Wrap, type Controller, type Axis, hold, clamp, loop, pingpong } from "./track";
 import { clip, type Anim } from "./layer";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
@@ -39,12 +39,15 @@ interface KnobEnv {
 }
 
 /**
- * A channel as authored: either a bag of `keys` (stored keyframes) or a `fn`
- * naming a generator plus its (modulatable) knobs (a procedural wave). One or
- * the other — the runtime samples both through the same seam.
+ * A channel as authored: a bag of `keys` (stored keyframes), a `fn` naming a
+ * generator plus its knobs (a procedural wave), or an *axis* — an `over`
+ * coordinate whose `keys` name whole animations, positioned along it. One of the
+ * three; the runtime reads keys and waves through one seam, and an axis through
+ * the same key law one currency up (poses, not scalars).
  */
 type ChannelData =
   | { readonly keys: Readonly<Record<string, KeyVal>> }
+  | { readonly over: string; readonly wrap?: string; readonly keys: Readonly<Record<string, KeyVal>> }
   | ({ readonly fn: string } & KnobEnv);
 
 /** The named edge rules a track may declare in JSON — its own `wrap`. */
@@ -141,7 +144,7 @@ export interface RigData {
   readonly svg?: string;
   readonly bones?: Readonly<Record<string, Bone>>;
   readonly skin?: SkinMap;
-  readonly animation?: Readonly<Record<string, NodeData>>;
+  readonly animations?: Readonly<Record<string, NodeData>>;
 }
 
 /**
@@ -299,15 +302,57 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
   const tracks: Record<string, Track> = {};
   const morphs: Morph[] = [];
   const paints: Paint[] = [];
+  // An axis channel names other animations, which the graph resolves *after*
+  // every track is built; so the parse loop leaves a placeholder and records a
+  // stub, wired to live children in `resolve` below (cycle-guarded there).
+  interface AxisStub {
+    readonly track: string;
+    readonly channel: string;
+    readonly over: string;
+    readonly wrap: Wrap;
+    readonly stops: number[];
+    readonly children: string[];
+    readonly eases: Ease[];
+  }
+  const axisStubs: AxisStub[] = [];
 
-  for (const name in data.animation) {
-    const node = data.animation[name]!;
+  for (const name in data.animations) {
+    const node = data.animations[name]!;
     if ("mix" in node) continue; // an interior node carries no channels — built below
     const channels: Record<string, Channel> = {};
     let duration = 0;
     const src = node.channels;
     for (const c in src) {
       const cd = src[c]!;
+
+      // An axis channel reads a coordinate, not the clock: its keys are positions
+      // and each value names a whole animation. It borrows the channel key-list
+      // machinery (positions sort, handles ease the crossfade) but lends the
+      // track no duration — its children own their own spans. Children are other
+      // nodes, resolved once the graph exists; record a stub and stand a
+      // placeholder in the bag so nothing downstream mistakes it for keys.
+      if ("over" in cd) {
+        const e = entriesOf(cd.keys);
+        if (e.some((x) => typeof x.v !== "string"))
+          throw new Error(`articul8: axis channel "${c}" keys must each name an animation`);
+        let w: Wrap = hold;
+        if (cd.wrap) {
+          const found = wraps[cd.wrap];
+          if (!found) throw new Error(`articul8: axis channel "${c}" names no wrap "${cd.wrap}"`);
+          w = found;
+        }
+        channels[c] = { times: [], values: [] }; // placeholder, wired at resolve
+        axisStubs.push({
+          track: name,
+          channel: c,
+          over: cd.over,
+          wrap: w,
+          stops: e.map((x) => x.t),
+          children: e.map((x) => x.v as string),
+          eases: easesOf(e),
+        });
+        continue;
+      }
 
       // A `fn` channel is a procedural wave, not stored keys: build the named
       // generator (its knobs may themselves be waves or key lists) and let it
@@ -386,7 +431,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
   const building = new Set<string>();
   const resolve = (name: string): Anim => {
     if (anims[name]) return anims[name]!;
-    const node = data.animation?.[name];
+    const node = data.animations?.[name];
     if (!node) throw new Error(`articul8: node "${name}" not found`);
     if (building.has(name)) throw new Error(`articul8: node "${name}" is cyclic`);
     building.add(name);
@@ -409,12 +454,83 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
         return blend(children.map((c) => c(t)), inputs.map((k) => w[k]!));
       };
     } else {
-      anim = clip(tracks[name]!);
+      // A leaf. First wire any axis channels: each names other animations, now
+      // resolvable through this very function — so `resolve` recurses, and its
+      // `building` guard catches an axis that (through any depth) reads itself.
+      const track = tracks[name]!;
+      for (const stub of axisStubs) {
+        if (stub.track !== name) continue;
+        const over = opts.controllers?.[stub.over];
+        if (!over)
+          throw new Error(`articul8: axis channel "${stub.channel}" of "${name}" names no controller "${stub.over}"`);
+        const children = stub.children.map(resolve);
+        (track.channels as Record<string, Channel>)[stub.channel] = {
+          times: [],
+          values: [],
+          axis: { over, wrap: stub.wrap, stops: stub.stops, children, eases: stub.eases },
+        };
+      }
+      anim = clip(track);
     }
     building.delete(name);
     return (anims[name] = anim);
   };
-  for (const name in data.animation) resolve(name);
+  for (const name in data.animations) resolve(name);
+
+  /**
+   * No-vote disjointness, checked once at load. A leaf track's channels must
+   * drive *disjoint* pose slots: a scalar/geometry/paint channel owns the one
+   * slot named by its key, an axis owns the union of its children's slots (and a
+   * child may itself be a mix or another axis, so we recurse the authored
+   * graph). Two channels reaching the same slot would silently fight — the last
+   * writer winning — so an *intended* overlap must instead go through a `mix`
+   * node's `by`, where the weights that resolve it are explicit. Every slot is
+   * visible from the JSON alone, so the editor can enforce this keystroke by
+   * keystroke; here we enforce it at build.
+   */
+  const slotCache = new Map<string, Set<string>>();
+  const visiting = new Set<string>();
+  const refName = (raw: KeyVal): string => (typeof raw === "object" ? String(raw.value) : String(raw));
+  const slotsOf = (nm: string): Set<string> => {
+    const hit = slotCache.get(nm);
+    if (hit) return hit;
+    if (visiting.has(nm)) return new Set(); // a cycle was already caught building the anim
+    visiting.add(nm);
+    const node = data.animations![nm]!;
+    const out = new Set<string>();
+    if ("mix" in node) {
+      for (const m of node.mix) for (const s of slotsOf(m)) out.add(s);
+    } else {
+      for (const c in node.channels) {
+        const cd = node.channels[c]!;
+        if ("over" in cd) for (const raw of Object.values(cd.keys)) for (const s of slotsOf(refName(raw))) out.add(s);
+        else out.add(c); // a plain channel is its own single slot
+      }
+    }
+    visiting.delete(nm);
+    slotCache.set(nm, out);
+    return out;
+  };
+  for (const name in data.animations) {
+    const node = data.animations[name]!;
+    if ("mix" in node) continue;
+    const claimed = new Map<string, string>(); // slot → the channel that first drove it
+    for (const c in node.channels) {
+      const cd = node.channels[c]!;
+      const slots =
+        "over" in cd
+          ? new Set<string>(Object.values(cd.keys).flatMap((raw) => [...slotsOf(refName(raw))]))
+          : new Set([c]);
+      for (const s of slots) {
+        const prev = claimed.get(s);
+        if (prev && prev !== c)
+          throw new Error(
+            `articul8: channels "${prev}" and "${c}" of "${name}" both drive "${s}" — an overlap needs an explicit \`mix\`/\`by\``,
+          );
+        claimed.set(s, c);
+      }
+    }
+  }
 
   const bindEls = (els: Obj[]): Puppet => {
     const ids: Record<string, number> = {};

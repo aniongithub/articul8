@@ -1,4 +1,4 @@
-import { type Pose, type Value } from "./pose";
+import { blend, type Pose, type Value } from "./pose";
 import { linear, type Ease } from "./ease";
 import { type Generator } from "./generator";
 
@@ -18,6 +18,10 @@ export interface Channel {
   readonly values: readonly Value[];
   readonly eases?: readonly Ease[];
   readonly fn?: Generator;
+  /** A third way to a value: not stored keys, not a wave, but an *axis* — a whole
+   *  animation per key, read over a coordinate instead of the clock. Present iff
+   *  this channel is pose-valued; then `times/values` are empty. */
+  readonly axis?: Axis;
 }
 
 /**
@@ -61,6 +65,33 @@ export const pingpong: Wrap = (t, d = 1) => {
 export type Controller = (
   t: number,
 ) => number | Readonly<Record<string, number>> | undefined;
+
+/**
+ * An axis: one channel that arrives at its value by reading a *coordinate*
+ * instead of the clock. Its keys are positions on that coordinate; each key's
+ * value is a whole animation — a *pose-valued* keyframe. Reading it is the exact
+ * same bracket-find + eased two-way blend as `at`, only the currency is a pose
+ * (`blend`) not a scalar (`lerp`): the coordinate `over(t)` chooses which two
+ * neighbours and how much, while each neighbour is sampled at the real clock `t`.
+ * So a 1-D blendspace — a gaze, walk↔run, any "everything in between" — is just
+ * positioned keys plus an edge rule, one currency up from a timed track. `over`
+ * may abstain (`undefined`) and the whole axis casts no vote, exactly like a
+ * keyframe past its edge. Because a neighbour is itself an animation, an axis
+ * key can name a clip, a mix, or another axis — the recursion closes.
+ */
+export interface Axis {
+  /** The read coordinate — a controller returning a scalar (never weights). */
+  readonly over: Controller;
+  /** What a coordinate past the key-position span means (clamp holds the edge,
+   *  hold abstains, loop tiles) — the same edge rule a track spends on time. */
+  readonly wrap: Wrap;
+  /** Key positions on the coordinate, ascending. */
+  readonly stops: readonly number[];
+  /** Per key: the animation it becomes, sampled at the clock when it votes. */
+  readonly children: readonly ((t: number) => Pose)[];
+  /** Per segment: the ease bending the crossfade leaving each key. */
+  readonly eases: readonly Ease[];
+}
 
 /**
  * A named animation: a bag of channels over a shared span, read in absolute
@@ -117,6 +148,38 @@ export const at = (ch: Channel, t: number): Value | undefined => {
 };
 
 /**
+ * Read an axis at the clock `t`. The coordinate `over(t)` selects the bracket
+ * and the crossfade; the two neighbouring animations are each sampled at `t` and
+ * blended by the eased fraction — `at`'s law exactly, spoken in pose currency.
+ * `undefined` from `over` abstains (no vote); a coordinate that lands off the
+ * *wrapped* span abstains too, just as a keyframe running off its keys does. A
+ * single key, or an edge under `clamp`, holds one child whole.
+ */
+export const readAxis = (ax: Axis, t: number): Pose | undefined => {
+  const x = ax.over(t);
+  if (x === undefined) return undefined; // the coordinate has no value now → abstain
+  if (typeof x !== "number")
+    // an axis reads a coordinate; a weights map named here is a wiring error.
+    throw new Error("articul8: an axis `over` controller must return a coordinate (number), not weights");
+  const { stops, children } = ax;
+  const n = stops.length;
+  const lo = stops[0]!;
+  const hi = stops[n - 1]!;
+  const span = hi - lo;
+  const w = ax.wrap(x - lo, span); // shift the span to 0…span so the wraps apply
+  if (w < 0 || w > span) return undefined; // hold ran off an edge → abstain
+  const u = w + lo;
+  let i = 0;
+  while (i < n - 1 && stops[i + 1]! < u) i++;
+  const a = stops[i]!;
+  const b = stops[i + 1] ?? a;
+  const seg = b - a;
+  if (seg === 0) return children[i]!(t); // single key or exact edge — hold one child
+  const f = (ax.eases[i] ?? linear)((u - a) / seg);
+  return blend([children[i]!(t), children[i + 1]!(t)], [1 - f, f]);
+};
+
+/**
  * Sample a whole track at an absolute time `t` into a (sparse) pose. A generator
  * channel takes the raw clock — it is already infinite and owns no span. Every
  * keyframe channel reads through the track's clock: its `coord` controller if
@@ -130,6 +193,15 @@ export function sample(track: Track, t: number): Pose {
   const pose: Pose = {};
   for (const c in track.channels) {
     const ch = track.channels[c]!;
+    if (ch.axis) {
+      // An axis is pose-valued: it contributes a *bag* of slots, not one. Load
+      // guaranteed its slots are disjoint from its siblings' (no-vote
+      // disjointness), so merging is a plain write — an overlap would have been
+      // rejected there, told to go through a `mix`'s `by` instead.
+      const p = readAxis(ch.axis, t);
+      if (p) for (const k in p) pose[k] = p[k]!;
+      continue;
+    }
     if (ch.fn) {
       const v = ch.fn(t); // a generator owns the clock: no coord, no wrap
       if (v !== undefined) pose[c] = v;

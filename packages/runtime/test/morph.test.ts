@@ -45,7 +45,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
   const eye = "M0,0 L10,0 L5,10 Z";
   const heart = "M0,4 C0,0 -4,-2 -6,1 C-9,5 -3,9 0,12 C3,9 9,5 6,1 C4,-2 0,0 0,4 Z";
   const svg = `<svg><path id="eye" d="${eye}"/><path id="heart" style="display:none" d="${heart}"/></svg>`;
-  const data = { animation: { m: { channels: { eye: { keys: { "1": "heart" } } } } } };
+  const data = { animations: { m: { channels: { eye: { keys: { "1": "heart" } } } } } };
 
   it("reconciles the two shapes instead of rejecting a topology mismatch", () => {
     expect(() => rig(data).bind(svg)).not.toThrow();
@@ -73,7 +73,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
   });
 
   it("errors clearly when a keyframe names no object", () => {
-    const bad = { animation: { m: { channels: { eye: { keys: { "1": "ghost" } } } } } };
+    const bad = { animations: { m: { channels: { eye: { keys: { "1": "ghost" } } } } } };
     expect(() => rig(bad).bind(`<svg><path id="eye" d="${eye}"/></svg>`)).toThrow(/names no object/);
   });
 
@@ -81,7 +81,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
     // The eye names *itself* at 0 and 1 and the heart at the midpoint — a whole
     // bloom-and-settle clip, no code, still one target and one shared topology.
     const trip = {
-      animation: { m: { channels: { eye: { keys: { "0": "eye", "0.5": "heart", "1": "eye" } } } } },
+      animations: { m: { channels: { eye: { keys: { "0": "eye", "0.5": "heart", "1": "eye" } } } } },
     };
     const r = rig(trip);
     r.bind(svg);
@@ -98,7 +98,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
 
   it("refuses a morph that blooms to more than one distinct target", () => {
     const two = {
-      animation: { m: { channels: { eye: { keys: { "0.5": "heart", "1": "star" } } } } },
+      animations: { m: { channels: { eye: { keys: { "0.5": "heart", "1": "star" } } } } },
     };
     const art = `<svg><path id="eye" d="${eye}"/><path id="heart" d="${heart}"/><path id="star" d="${eye}"/></svg>`;
     expect(() => rig(two).bind(art)).toThrow(/one for now/);

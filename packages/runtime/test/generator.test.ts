@@ -61,7 +61,7 @@ describe("generator · rig channel", () => {
   const data = {
     bones: { nose: { x: 0, y: 5 } },
     skin: { nose: { "0": { "*": 1 } } },
-    animation: {
+    animations: {
       sniff: { channels: { "nose.y": { fn: "noise", bias: 5, amp: 1, freq: 4 } } },
     },
   };
@@ -80,7 +80,7 @@ describe("generator · rig channel", () => {
   });
 
   it("rejects an unknown generator name", () => {
-    const bad = { animation: { s: { channels: { "nose.y": { fn: "wobble" } } } } };
+    const bad = { animations: { s: { channels: { "nose.y": { fn: "wobble" } } } } };
     expect(() => rig(bad)).toThrow(/no generator/);
   });
 
@@ -92,7 +92,7 @@ describe("generator · rig channel", () => {
 // Composition: any knob may itself be a wave or a key list, read afresh every
 // frame. There is no combinator node — a richer spec is the whole mechanism.
 describe("generator · composition", () => {
-  const build = (cd: object) => rig({ animation: { s: { channels: { x: cd } } } }).tracks.s!;
+  const build = (cd: object) => rig({ animations: { s: { channels: { x: cd } } } }).tracks.s!;
   const val = (cd: object, t: number) => sample(build(cd), t).x as number;
 
   it("modulates a knob with a keyframe list (bias tracks the keys, clamped)", () => {

@@ -44,7 +44,7 @@ describe("paint · a dotted channel drives an attribute", () => {
   // endpoints. It rides the same track as the morph, so one weight paints both.
   const svg = `<svg><path id="eye" d="M0,0 L10,0 L5,10 Z"/></svg>`;
   const data = {
-    animation: { m: { channels: { "eye.fill": { keys: { "0": "#000000", "1": "#e6394a" } } } } },
+    animations: { m: { channels: { "eye.fill": { keys: { "0": "#000000", "1": "#e6394a" } } } } },
   };
 
   it("fills a numeric channel from the codec, keyed by weight", () => {
@@ -74,7 +74,7 @@ describe("paint · a dotted channel drives an attribute", () => {
 describe("paint · rest and references", () => {
   it("rests on the authored attribute when the channel omits key 0", () => {
     const svg = `<svg><path id="dot" fill="#ffffff" d="M0,0 L1,0"/></svg>`;
-    const data = { animation: { m: { channels: { "dot.fill": { keys: { "1": "#000000" } } } } } };
+    const data = { animations: { m: { channels: { "dot.fill": { keys: { "1": "#000000" } } } } } };
     const r = rig(data);
     r.bind(svg);
     const ch = r.tracks.m!.channels["dot.fill"]!;
@@ -84,13 +84,13 @@ describe("paint · rest and references", () => {
 
   it("throws when a channel omits key 0 with no authored value to rest on", () => {
     const svg = `<svg><path id="dot" d="M0,0 L1,0"/></svg>`;
-    const data = { animation: { m: { channels: { "dot.fill": { keys: { "1": "#000000" } } } } } };
+    const data = { animations: { m: { channels: { "dot.fill": { keys: { "1": "#000000" } } } } } };
     expect(() => rig(data).bind(svg)).toThrow(/needs a key at 0/);
   });
 
   it("wears another object's same attribute when a key names it", () => {
     const svg = `<svg><path id="a" fill="#000000" d="M0,0 L1,0"/><path id="b" fill="#112233" d="M0,0 L1,0"/></svg>`;
-    const data = { animation: { m: { channels: { "a.fill": { keys: { "1": "b" } } } } } };
+    const data = { animations: { m: { channels: { "a.fill": { keys: { "1": "b" } } } } } };
     const r = rig(data);
     r.bind(svg);
     expect(r.tracks.m!.channels["a.fill"]!.values[1]).toEqual([17, 34, 51, 1]);

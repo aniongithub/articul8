@@ -1,0 +1,161 @@
+// cat.rig.jsonc — the whole cat, authored as data.
+//
+// A rig is three parts and a library of clips:
+//   • bones      the abstract handles the animation moves (never drawn)
+//   • skin       which drawn shape each bone deforms, and by how much
+//   • animations named clips: a bone attribute over time, a procedural wave,
+//                a morph between shapes, or an axis that blends other clips
+//
+// Nothing here is code. The runtime reads this file, and the host (main.ts)
+// only supplies the live inputs — the cursor, a click — as named controllers.
+// Comments are for you and for the next author (human or agent); jsonc-parser
+// strips them at load, so the evaluator never sees them.
+{
+  // The SVG this rig animates. Its <path> elements are the drawn shapes; ids in
+  // the SVG (eyeR, eyeL, heartR, heartL, nose) are how channels name geometry.
+  "svg": "cat.svg",
+
+  // Bones: named handles with a rest position. A bone is a coordinate frame the
+  // skeleton can translate/scale/rotate; the skin rides it. These x/y are the
+  // eyes' and nose's resting centres, in SVG user units — every gaze extreme
+  // below is just a few units off these.
+  "bones": {
+    "eyeR": { "x": 65.359, "y": 57.512 },
+    "eyeL": { "x": 35.414, "y": 57.512 },
+    "nose": { "x": 50.08,  "y": 61.06  }
+  },
+
+  // Skin: bone -> shape -> (point index | "*") -> weight.
+  // The shape key is a path's draw-order index (a number) or its SVG id. "*"
+  // weights every point of that shape; weights are normalised per point at bind.
+  // Here each bone owns one shape wholesale: eyeR drives shape 0, eyeL shape 1,
+  // nose drives the shape with id "nose".
+  "skin": {
+    "eyeR": { "0":    { "*": 1 } },
+    "eyeL": { "1":    { "*": 1 } },
+    "nose": { "nose": { "*": 1 } }
+  },
+
+  // Animations: the clip library. Each entry is one animation the host can play
+  // by name. A clip is a set of channels; a channel writes one slot (a bone
+  // attribute like eyeR.x, a whole-shape geometry like eyeR, or a paint like
+  // eyeR.fill) over time. Channels of one clip must write disjoint slots — that
+  // is why several of these can be mixed with no weights at all.
+  "animations": {
+
+    // sniff — a procedural channel, no keyframes. The nose's y rides a sine
+    // whose centre (bias) is itself a slow noise wander, so the sniff never
+    // repeats exactly. fn/bias/amp/freq are the generator's knobs; any knob may
+    // be a constant or another wave, arbitrarily deep.
+    "sniff": {
+      "channels": {
+        "nose.y": {
+          "fn": "sine",
+          "bias": { "fn": "noise", "bias": 61.06, "amp": 0.3, "freq": 12 },
+          "amp": 0.7,
+          "freq": 1.2
+        }
+      }
+    },
+
+    // blink — a keyed clip that loops. "wrap": "loop" means a time past the last
+    // key (2000 ms) folds back to the start, so the blink repeats forever. Both
+    // eyelids squash together: sy (vertical scale) holds at 1, snaps to 0.08 for
+    // ~100 ms around t=1300, then reopens. Times are milliseconds.
+    "blink": {
+      "wrap": "loop",
+      "channels": {
+        "eyeR.sy": { "keys": { "0": 1, "1200": 1, "1300": 0.08, "1400": 1, "2000": 1 } },
+        "eyeL.sy": { "keys": { "0": 1, "1200": 1, "1300": 0.08, "1400": 1, "2000": 1 } }
+      }
+    },
+
+    // The four gaze extremes. Each is a one-key pose: where the eyes sit when the
+    // cursor is hard to one side. "wrap": "clamp" holds that single key at every
+    // time, so sampling an extreme at any clock returns the same pose (the axis
+    // below relies on this). gazeLeft/Right move x only; gazeUp/Down move y only —
+    // deliberately disjoint so the two axes never fight over a slot.
+    "gazeLeft":  { "wrap": "clamp", "channels": {
+      "eyeR.x": { "keys": { "0": 62.859 } },
+      "eyeL.x": { "keys": { "0": 32.914 } }
+    } },
+    "gazeRight": { "wrap": "clamp", "channels": {
+      "eyeR.x": { "keys": { "0": 67.859 } },
+      "eyeL.x": { "keys": { "0": 37.914 } }
+    } },
+    "gazeUp":    { "wrap": "clamp", "channels": {
+      "eyeR.y": { "keys": { "0": 54.712 } },
+      "eyeL.y": { "keys": { "0": 54.712 } }
+    } },
+    "gazeDown":  { "wrap": "clamp", "channels": {
+      "eyeR.y": { "keys": { "0": 60.312 } },
+      "eyeL.y": { "keys": { "0": 60.312 } }
+    } },
+
+    // look — the cursor blendspace, expressed as two axis channels.
+    //
+    // An axis channel is the same keyframe law as any track, one currency up: its
+    // keys are positions along a coordinate and its VALUES are other animations.
+    // "over" names the controller that supplies that coordinate; the runtime
+    // brackets the coordinate between two neighbouring keys and blends those two
+    // animations by the eased fraction — exactly how a scalar channel blends two
+    // numbers, but the thing being blended is a whole pose.
+    //
+    //   h reads gazeX in [-1, 1]: -1 -> gazeLeft, +1 -> gazeRight, 0 -> midpoint
+    //   v reads gazeY in [-1, 1]: -1 -> gazeUp,   +1 -> gazeDown,  0 -> midpoint
+    //
+    // "wrap": "clamp" holds the end animation past the last key (cursor pinned to
+    // an edge). Because the extremes are symmetric about rest, coordinate 0 lands
+    // exactly on the resting eye — no explicit centre key needed. h writes only x
+    // slots, v only y slots, so look folds them with NO weights: disjoint writes.
+    "look": {
+      "channels": {
+        "h": { "over": "gazeX", "wrap": "clamp", "keys": { "-1": "gazeLeft", "1": "gazeRight" } },
+        "v": { "over": "gazeY", "wrap": "clamp", "keys": { "-1": "gazeUp",   "1": "gazeDown"  } }
+      }
+    },
+
+    // morph — eyes bloom into hearts on click, then settle back.
+    //
+    // "controller": "heartClock" hands this clip its clock instead of wall time:
+    // the host's heartClock abstains (returns undefined) until the first click,
+    // so the morph casts no vote and the eyes rest; a click makes it ramp 0 -> 1
+    // once. "wrap": "clamp" trims that ramp to a single [0, 1] play.
+    //
+    // Four channels, each a keyed tween that departs eye -> heart -> eye:
+    //   eyeR / eyeL          geometry slots — the SHAPE morphs (value names a
+    //                        drawn shape: eyeR, heartR, ...), interpolated as paths
+    //   eyeR.fill / eyeL.fill paint slots — the colour tweens black -> heart-red -> black
+    //
+    // Each key's "in"/"out" are Bézier handles shaping the tween: "out" how it
+    // leaves this key toward the next, "in" how it arrives at the next. The
+    // 0.42/0.58 handles give the classic ease-in-out so the bloom eases, holds
+    // the heart at t=0.5, and eases back.
+    "morph": {
+      "controller": "heartClock",
+      "wrap": "clamp",
+      "channels": {
+        "eyeR": { "keys": {
+          "0":   { "value": "eyeR",   "out": [0.42, 0] },
+          "0.5": { "value": "heartR", "in": [0.58, 1], "out": [0.42, 0] },
+          "1":   { "value": "eyeR",   "in": [0.58, 1] }
+        } },
+        "eyeL": { "keys": {
+          "0":   { "value": "eyeL",   "out": [0.42, 0] },
+          "0.5": { "value": "heartL", "in": [0.58, 1], "out": [0.42, 0] },
+          "1":   { "value": "eyeL",   "in": [0.58, 1] }
+        } },
+        "eyeR.fill": { "keys": {
+          "0":   { "value": "#000000", "out": [0.42, 0] },
+          "0.5": { "value": "#e6394a", "in": [0.58, 1], "out": [0.42, 0] },
+          "1":   { "value": "#000000", "in": [0.58, 1] }
+        } },
+        "eyeL.fill": { "keys": {
+          "0":   { "value": "#000000", "out": [0.42, 0] },
+          "0.5": { "value": "#e6394a", "in": [0.58, 1], "out": [0.42, 0] },
+          "1":   { "value": "#000000", "in": [0.58, 1] }
+        } }
+      }
+    }
+  }
+}
