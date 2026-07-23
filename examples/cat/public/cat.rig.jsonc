@@ -36,6 +36,27 @@
     "nose": { "nose": { "*": 1 } }
   },
 
+  // Controllers: the live inputs this rig expects. Declaring them makes the rig
+  // self-describing — this file alone says exactly what the host must feed it,
+  // so an editor can stand in stub sliders and an animation names an input only
+  // if it exists (a typo like "gazX" is a load error, not a silent dead knob).
+  //   kind   — the runtime *currency*. "number" today; "weights" is reserved for
+  //            when a mix's `by` faders become data. Written for completeness; the
+  //            evaluator does not yet branch on it.
+  //   editor — how the value is *authored* (the WinForms [Editor] model). Read by
+  //            the inspector, never by the evaluator.
+  //     as "coordinate" — swept along a ruler. range is that ruler; the axis keys
+  //                        above (-1, 1) are placed against it. default is rest.
+  //     as "clock"      — a time source read through a clip. gate "trigger" means
+  //                        it abstains until fired (the click), so no default.
+  // The host still supplies the actual t -> value closures (main.ts); this is the
+  // signature, those are the bodies.
+  "controllers": {
+    "gazeX":      { "kind": "number", "editor": { "as": "coordinate", "range": [-1, 1], "default": 0 } },
+    "gazeY":      { "kind": "number", "editor": { "as": "coordinate", "range": [-1, 1], "default": 0 } },
+    "heartClock": { "kind": "number", "editor": { "as": "clock", "gate": "trigger" } }
+  },
+
   // Animations: the clip library. Each entry is one animation the host can play
   // by name. A clip is a set of channels; a channel writes one slot (a bone
   // attribute like eyeR.x, a whole-shape geometry like eyeR, or a paint like

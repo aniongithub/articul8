@@ -136,15 +136,57 @@ const buildGen = (cd: { fn: string } & KnobEnv): Knob => {
 };
 
 /**
- * The rig: a skeleton, its skin, and named animations — the art itself lives
- * in a separate SVG. Anything omitted is a default; anything at rest is simply
- * left unsaid.
+ * How a controller is *authored* — the WinForms `[Editor]`/`UITypeEditor` model.
+ * `as` names the authoring surface; the rest configure it. This is read by the
+ * property inspector and the analyzer, and NEVER by the evaluator — it is chrome
+ * and intent, not mechanism.
+ *  - `coordinate`: a value swept along a shared ruler. `range` is that ruler (the
+ *    axis keys are placed against, declared once here, not per key); `default` is
+ *    the rest value (and doubles as the abstain value); `step` an optional snap.
+ *  - `clock`: a time source read *through* a clip. It has no coordinate ruler —
+ *    a scrubber's bounds are the clip's own key span. `gate: "trigger"` means it
+ *    abstains until fired (rest *is* abstain, so there is no `default`); `"free"`
+ *    runs continuously.
+ *  - `weights`: a fader bank feeding a `mix`/`by`. Reserved — no `by`-as-data yet.
+ */
+export type EditorData =
+  | {
+      readonly as: "coordinate";
+      readonly range?: readonly [number, number];
+      readonly default?: number;
+      readonly step?: number;
+      readonly label?: string;
+    }
+  | { readonly as: "clock"; readonly gate?: "free" | "trigger"; readonly label?: string }
+  | { readonly as: "weights"; readonly label?: string };
+
+/**
+ * A controller *declaration* — the signature of an impure leaf. `kind` is the
+ * runtime **currency**: the only field the evaluator would ever branch on
+ * (`number` today; `weights` reserved for when `by` becomes data). It is written
+ * for completeness but not yet enforced — we adopt the factoring without pre-
+ * paying the currency split. `editor` is the authoring model above. The host
+ * still supplies the actual `t → value` closure at bind; this declares *what*
+ * the rig expects, the closure is *how* it is produced — the signature, not the
+ * body. Declaring controllers here makes a rig self-describing: the `.jsonc`
+ * alone tells an editor (or a reader) exactly what inputs to feed it.
+ */
+export interface ControllerData {
+  readonly kind?: "number" | "weights";
+  readonly editor: EditorData;
+}
+
+/**
+ * The rig: a skeleton, its skin, named animations, and the controller inputs its
+ * animations name — the art itself lives in a separate SVG. Anything omitted is a
+ * default; anything at rest is simply left unsaid.
  */
 export interface RigData {
   readonly svg?: string;
   readonly bones?: Readonly<Record<string, Bone>>;
   readonly skin?: SkinMap;
   readonly animations?: Readonly<Record<string, NodeData>>;
+  readonly controllers?: Readonly<Record<string, ControllerData>>;
 }
 
 /**
@@ -299,6 +341,31 @@ const scan = (svg: string): Obj[] => {
 
 export function rig(data: RigData, opts: RigOptions = {}): Rig {
   const skeleton: Skeleton = data.bones ?? {};
+
+  // Controller declarations, validated once. A rig *may* declare its controllers
+  // (name → currency + authoring editor); when it does, the declarations are
+  // authoritative — every controller an animation names must appear here, so a
+  // typo (`over: "gazX"`) is a load error rather than a silent dead input. The
+  // block is optional: a rig that omits it keeps the old convention (names are
+  // resolved straight against the host map). Currency (`kind`) is recorded but
+  // not yet enforced — the `weights` branch doesn't exist until `by` is data.
+  const decls = data.controllers;
+  if (decls) {
+    for (const n in decls) {
+      const d = decls[n]!;
+      if (d.kind !== undefined && d.kind !== "number" && d.kind !== "weights")
+        throw new Error(`articul8: controller "${n}" declares unknown kind "${d.kind}"`);
+      const as = d.editor?.as;
+      if (as !== "coordinate" && as !== "clock" && as !== "weights")
+        throw new Error(`articul8: controller "${n}" declares unknown editor "as" "${as}"`);
+    }
+  }
+  /** When a `controllers` block is present, a named controller must be declared. */
+  const requireDeclared = (name: string, site: string): void => {
+    if (decls && !(name in decls))
+      throw new Error(`articul8: ${site} names controller "${name}" not declared in \`controllers\``);
+  };
+
   const tracks: Record<string, Track> = {};
   const morphs: Morph[] = [];
   const paints: Paint[] = [];
@@ -414,6 +481,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
     }
     let coord: Controller | undefined;
     if (node.controller) {
+      requireDeclared(node.controller, `track "${name}"`);
       coord = opts.controllers?.[node.controller];
       if (!coord) throw new Error(`articul8: track "${name}" names no controller "${node.controller}"`);
     }
@@ -440,6 +508,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
       const inputs = node.mix;
       const set = new Set(inputs);
       const children = inputs.map(resolve); // may name leaves or other mix nodes
+      requireDeclared(node.by, `node "${name}"`);
       const by = opts.controllers?.[node.by];
       if (!by) throw new Error(`articul8: node "${name}" names no controller "${node.by}"`);
       anim = (t) => {
@@ -460,6 +529,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
       const track = tracks[name]!;
       for (const stub of axisStubs) {
         if (stub.track !== name) continue;
+        requireDeclared(stub.over, `axis channel "${stub.channel}" of "${name}"`);
         const over = opts.controllers?.[stub.over];
         if (!over)
           throw new Error(`articul8: axis channel "${stub.channel}" of "${name}" names no controller "${stub.over}"`);

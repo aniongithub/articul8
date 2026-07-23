@@ -31,7 +31,7 @@ export {
 export { world, type Bone, type Skeleton } from "./skeleton";
 export { parsePath, buildPath, type ParsedPath, type Pt, type Seg } from "./path";
 export { bindSkin, type Skin, type SkinMap } from "./skin";
-export { rig, type Rig, type RigData, type RigOptions, type Controllers, type View, type Puppet, type Attrs } from "./rig";
+export { rig, type Rig, type RigData, type RigOptions, type Controllers, type ControllerData, type EditorData, type View, type Puppet, type Attrs } from "./rig";
 export { parseRig } from "./load";
 export { parseAttr, type Attr } from "./attr";
 export {

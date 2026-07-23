@@ -285,3 +285,65 @@ describe("rig · axis channel (a blendspace as keys over a coordinate)", () => {
     ).toThrow(/both drive "head.x".*explicit `mix`/);
   });
 });
+
+describe("rig · controller declarations (self-describing inputs)", () => {
+  it("throws when an animation names an undeclared controller", () => {
+    expect(() =>
+      rig(
+        {
+          controllers: { gazeX: { editor: { as: "coordinate" } } },
+          animations: {
+            lo: { channels: { "head.x": { keys: { "0": 0 } } } },
+            hi: { channels: { "head.x": { keys: { "0": 10 } } } },
+            gait: { channels: { g: { over: "gazY", keys: { "0": "lo", "1": "hi" } } } },
+          },
+        },
+        { controllers: { gazY: () => 0 } }, // supplied, but not declared
+      ),
+    ).toThrow(/not declared in `controllers`/);
+  });
+
+  it("resolves a declared, supplied controller", () => {
+    const gait = rig(
+      {
+        controllers: { gazeX: { kind: "number", editor: { as: "coordinate", range: [-1, 1], default: 0 } } },
+        animations: {
+          lo: { channels: { "head.x": { keys: { "0": 0 } } } },
+          hi: { channels: { "head.x": { keys: { "0": 10 } } } },
+          gait: { channels: { g: { over: "gazeX", wrap: "clamp", keys: { "0": "lo", "1": "hi" } } } },
+        },
+      },
+      { controllers: { gazeX: () => 0.5 } },
+    ).anims["gait"]!;
+    expect(gait(0)["head.x"]).toBeCloseTo(5); // 0.5 along lo(0)->hi(10)
+  });
+
+  it("throws on an unknown editor `as`", () => {
+    expect(() =>
+      rig({ controllers: { c: { editor: { as: "wat" } as never } }, animations: {} }),
+    ).toThrow(/unknown editor "as"/);
+  });
+
+  it("throws on an unknown kind", () => {
+    expect(() =>
+      rig({ controllers: { c: { kind: "vector" as never, editor: { as: "clock" } } }, animations: {} }),
+    ).toThrow(/unknown kind/);
+  });
+
+  it("resolves controllers by convention when no block is declared", () => {
+    const move = rig(
+      { animations: { move: { controller: "clock", channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } } },
+      { controllers: { clock: (t) => t } },
+    ).tracks["move"]!;
+    expect(sample(move, 500)["head.x"]).toBeCloseTo(5); // legacy path unchanged
+  });
+
+  it("still requires the host to supply a declared controller", () => {
+    expect(() =>
+      rig({
+        controllers: { clock: { editor: { as: "clock", gate: "trigger" } } },
+        animations: { move: { controller: "clock", channels: { "head.x": { keys: { "0": 0 } } } } },
+      }),
+    ).toThrow(/names no controller "clock"/);
+  });
+});
