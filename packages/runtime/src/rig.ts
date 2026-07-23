@@ -7,6 +7,7 @@ import { at, type Channel, type Track, type Wrap, type Controller, type Axis, ho
 import { clip, type Anim } from "./layer";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
+import { analyze } from "./analyze";
 import { interpolate } from "polymorph-js";
 
 /**
@@ -557,41 +558,20 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
    * node's `by`, where the weights that resolve it are explicit. Every slot is
    * visible from the JSON alone, so the editor can enforce this keystroke by
    * keystroke; here we enforce it at build.
+   *
+   * The slots themselves come from the shared `analyze` pass — the same
+   * structural read the editor uses — so this law is stated once, in one place,
+   * and the loader merely enforces it. (`resolve` above has already thrown on any
+   * cycle or missing reference, so the model here is whole.)
    */
-  const slotCache = new Map<string, Set<string>>();
-  const visiting = new Set<string>();
-  const refName = (raw: KeyVal): string => (typeof raw === "object" ? String(raw.value) : String(raw));
-  const slotsOf = (nm: string): Set<string> => {
-    const hit = slotCache.get(nm);
-    if (hit) return hit;
-    if (visiting.has(nm)) return new Set(); // a cycle was already caught building the anim
-    visiting.add(nm);
-    const node = data.animations![nm]!;
-    const out = new Set<string>();
-    if ("mix" in node) {
-      for (const m of node.mix) for (const s of slotsOf(m)) out.add(s);
-    } else {
-      for (const c in node.channels) {
-        const cd = node.channels[c]!;
-        if ("over" in cd) for (const raw of Object.values(cd.keys)) for (const s of slotsOf(refName(raw))) out.add(s);
-        else out.add(c); // a plain channel is its own single slot
-      }
-    }
-    visiting.delete(nm);
-    slotCache.set(nm, out);
-    return out;
-  };
+  const model = analyze(data);
   for (const name in data.animations) {
     const node = data.animations[name]!;
     if ("mix" in node) continue;
+    const channels = model.nodes[name]!.channels!;
     const claimed = new Map<string, string>(); // slot → the channel that first drove it
     for (const c in node.channels) {
-      const cd = node.channels[c]!;
-      const slots =
-        "over" in cd
-          ? new Set<string>(Object.values(cd.keys).flatMap((raw) => [...slotsOf(refName(raw))]))
-          : new Set([c]);
-      for (const s of slots) {
+      for (const s of channels[c]!.slots) {
         const prev = claimed.get(s);
         if (prev && prev !== c)
           throw new Error(
