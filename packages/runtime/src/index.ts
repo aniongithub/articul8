@@ -6,7 +6,7 @@
  * clock and asks for a frame whenever it likes.
  */
 export { blend, type Pose, type Value } from "./pose";
-export { sample, at, type Track, type Channel, type Axis, type Controller } from "./track";
+export { sampleClip, at, type Clip, type Channel, type Source } from "./track";
 export { sine, noise, generators, type Env, type Knob, type Generator } from "./generator";
 export {
   linear,

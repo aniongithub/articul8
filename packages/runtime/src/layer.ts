@@ -1,5 +1,5 @@
 import { blend, type Pose } from "./pose";
-import { sample, type Track, type Wrap } from "./track";
+import { sampleClip, type Clip, type Wrap } from "./track";
 
 /**
  * An animation is a lambda: a coordinate `v` in, a pose out. For a timed clip
@@ -17,9 +17,10 @@ export type Anim = (v: number) => Pose;
  */
 export { hold, clamp, loop, pingpong, type Wrap } from "./track";
 
-/** Read a track as an animation, sampled at the coordinate it is handed —
- *  absolute time for a clip, threaded straight through the track's own wrap. */
-export const clip = (track: Track): Anim => (v) => sample(track, v);
+/** Read a clip as an animation, sampled at the parameter it is handed —
+ *  threaded straight through the clip's own wrap. The one bridge from data to
+ *  Anim. */
+export const clip = (c: Clip): Anim => (u) => sampleClip(c, u);
 
 /**
  * Re-wrap a clip at the callsite — an *ad-hoc* edge rule layered over whatever

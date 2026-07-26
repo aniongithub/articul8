@@ -17,26 +17,28 @@ const [svg, data] = await Promise.all([
 /**
  * Controllers are the ONLY place live input enters the rig. Each is a plain
  * `t -> value` function the runtime calls while sampling; the rig's JSON names
- * which one it wants. Three of them here, of two different kinds — a clock and
- * two coordinates — but the map is uniform; only who reads a given entry differs.
+ * which one it wants and which clips it places. Three of them here — a clock and
+ * two coordinates — but the map is uniform; only the clips each one places differ.
  */
-const BLOOM = 900; // duration of one eye -> heart -> eye bloom, in ms
-let gazeX = 0; // cursor x, remapped to [-1, 1]; 0 = centred
-let gazeY = 0; // cursor y, remapped to [-1, 1]; 0 = centred
+let cursorX = 0; // cursor x, remapped to [-1, 1]; 0 = centred. NOT eye geometry —
+let cursorY = 0; // just the coordinate the gaze controllers read and place clips on.
 let last = 0; // the most recent frame time, so events can re-render in place
 let bloom = 0; // wall-clock ms when the last click happened
 let bloomed = false; // has the cat been clicked yet?
 const controllers = {
-  // A CLOCK. The morph track names this for its clock. Before any click it
-  // abstains (undefined) so the morph casts no vote and the eyes rest; after a
-  // click it returns a click-relative ramp, which the track's "clamp" wrap trims
-  // to a single [0, 1] play.
-  heartClock: (t: number) => (bloomed ? (t - bloom) / BLOOM : undefined),
-  // Two COORDINATES. Each returns a bare number in [-1, 1] — not a clock, not a
-  // weight map — read by an axis channel of the `look` track to pick where along
-  // its blendspace to sit. The whole cursor blend is just these two scalars.
-  gazeX: (_t: number) => gazeX,
-  gazeY: (_t: number) => gazeY,
+  // A CLOCK. The bloom clip owns its own timing (900 ms of ms-keyed motion), so we
+  // just hand the heartClock controller the RAW click-relative time (t - bloom) and
+  // it plays the clip straight through (offset 1, no time-scaling). Before any click
+  // it abstains (undefined) so the bloom casts no vote and the eyes rest; after a
+  // click it plays once, the clip's "clamp" wrap holding the ends.
+  heartClock: (t: number) => (bloomed ? t - bloom : undefined),
+  // The coordinate sources, bound to the gaze controller names the rig declares.
+  // Each just hands back where the cursor sits on its [-1, 1] ruler — a bare scalar,
+  // nothing eye-shaped. The gazeX/gazeY controllers in the rig turn that coordinate
+  // into eye motion by PLACING their clips (gazeLeft at offset -1, gazeRight at +1,
+  // etc.) and blending; the host never touches eye.x.
+  gazeX: (_t: number) => cursorX,
+  gazeY: (_t: number) => cursorY,
 };
 
 const r = rig(data, { controllers });
@@ -44,45 +46,48 @@ const view = r.bind(stage, svg);
 const a = r.anims;
 
 /**
- * The rig hands every animation back as a ready-to-call lambda — leaf clip or
- * interior blend, all the same to us. We just pick the four we want to play. See
- * cat.rig.jsonc for what each one does; here they are only names we will fold.
+ * The rig hands every playable node back as a ready-to-call lambda — a leaf clip
+ * read directly, or a controller that places its clips on a coordinate. We pick
+ * the ones we want to fold. See cat.rig.jsonc for what each does; here they are
+ * only names.
  */
-const blink = a.blink!; // eyelids squash shut and reopen, looping forever
-const heart = a.morph!; // eyes bloom into hearts on click, then settle back
+const blink = a.blink!; // eyelids squash shut and reopen, looping forever (wall time)
 const sniff = a.sniff!; // nose drifts on a procedural sine + noise wave
-const look = a.look!; // eyes track the cursor via two orthogonal axes (x, y)
+const heart = a.heartClock!; // eyes bloom into hearts on click, then settle back
+const gazeX = a.gazeX!; // the horizontal gaze controller (places gazeLeft/Right)
+const gazeY = a.gazeY!; // the vertical gaze controller (places gazeUp/Down)
 
 const unit = (v: number): number => (v < -1 ? -1 : v > 1 ? 1 : v);
 
 function render(ms: number): void {
   last = ms;
-  // Fold the four animations into one pose. Each writes its own slots (lid
-  // scale, eye shape + colour, nose offset, gaze offset), so none overrides
-  // another and `mix` needs no weights — a blooming heart still blinks and
-  // sniffs while the eyes keep tracking.
-  view.render(mix(blink(ms), heart(ms), sniff(ms), look(ms)));
+  // Fold the animations into one pose. Each writes its own slots (lid scale, eye
+  // shape + colour, nose offset, gaze x, gaze y), so none overrides another and
+  // `mix` needs no weights — a blooming heart still blinks and sniffs while the
+  // eyes keep tracking.
+  view.render(mix(blink(ms), heart(ms), sniff(ms), gazeX(ms), gazeY(ms)));
   clock.textContent = `${Math.round(ms)} ms`;
 }
 
-// Cursor -> gaze. Map the pointer's position within the stage to [-1, 1] on each
-// axis and re-render the current frame. The controllers just read these; the
-// `look` axes turn them into eye movement. `unit` clamps to the [-1, 1] range.
+// Cursor -> coordinate. Map the pointer's position within the stage to [-1, 1] on
+// each axis and re-render. We only set the COORDINATE here; the gazeX/gazeY
+// controllers read it and place their clips to produce the actual eye movement.
+// `unit` clamps to [-1, 1].
 stage.addEventListener("pointermove", (e) => {
   const b = stage.getBoundingClientRect();
-  gazeX = unit(((e.clientX - b.left) / b.width) * 2 - 1);
-  gazeY = unit(((e.clientY - b.top) / b.height) * 2 - 1);
+  cursorX = unit(((e.clientX - b.left) / b.width) * 2 - 1);
+  cursorY = unit(((e.clientY - b.top) / b.height) * 2 - 1);
   render(last);
 });
-// Pointer gone -> recentre the gaze so the eyes return to rest.
+// Pointer gone -> recentre the coordinate so the controllers place clips at rest.
 stage.addEventListener("pointerleave", () => {
-  gazeX = 0;
-  gazeY = 0;
+  cursorX = 0;
+  cursorY = 0;
   render(last);
 });
 // A click (on the cat or the love button) triggers the heart bloom.
 const react = (): void => {
-  bloom = last; // stamp the bloom's origin at now; the heart's controller reads it
+  bloom = last; // stamp the bloom's origin at now; heartClock reads it as t - bloom
   bloomed = true;
   render(last);
 };

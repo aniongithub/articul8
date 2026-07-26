@@ -3,11 +3,10 @@ import { bindSkin, type Skin, type SkinMap } from "./skin";
 import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
 import { parseAttr, type Attr } from "./attr";
 import { blend, type Pose } from "./pose";
-import { at, type Channel, type Track, type Wrap, type Controller, type Axis, hold, clamp, loop, pingpong } from "./track";
+import { at, type Channel, type Clip, type Wrap, type Source, hold, clamp, loop, pingpong } from "./track";
 import { clip, type Anim } from "./layer";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
-import { analyze } from "./analyze";
 import { interpolate } from "polymorph-js";
 
 /**
@@ -40,27 +39,44 @@ interface KnobEnv {
 }
 
 /**
- * A channel as authored: a bag of `keys` (stored keyframes), a `fn` naming a
- * generator plus its knobs (a procedural wave), or an *axis* — an `over`
- * coordinate whose `keys` name whole animations, positioned along it. One of the
- * three; the runtime reads keys and waves through one seam, and an axis through
- * the same key law one currency up (poses, not scalars).
+ * A channel as authored: a bag of `keys` (stored keyframes) or a `fn` naming a
+ * generator plus its knobs (a procedural wave). One of the two; the runtime
+ * reads keys and waves through one seam. (Blendspaces are no longer a channel —
+ * placing and blending clips is a *controller's* job, not data buried in a leaf.)
  */
 type ChannelData =
   | { readonly keys: Readonly<Record<string, KeyVal>> }
-  | { readonly over: string; readonly wrap?: string; readonly keys: Readonly<Record<string, KeyVal>> }
   | ({ readonly fn: string } & KnobEnv);
 
-/** The named edge rules a track may declare in JSON — its own `wrap`. */
+/** The named edge rules a clip may declare in JSON — its own `wrap`. */
 const wraps: Readonly<Record<string, Wrap>> = { hold, clamp, loop, pingpong };
 
-interface TrackData {
+/**
+ * A clip as authored: atomic keyframe data. A bag of channels and an optional
+ * `wrap` (its own edge rule past its span). A clip is a canonical `[0, 1]` motion
+ * — `0` = rest, `1` = full extreme — that knows nothing about clocks,
+ * coordinates, ranges, or who samples it. Whoever *places* it (a controller)
+ * decides the coordinate it reads.
+ */
+interface ClipData {
   readonly channels: Readonly<Record<string, ChannelData>>;
-  /** What a time past this track's span means — defaults to `hold` (abstain). */
+  /** What a parameter past this clip's span means — defaults to `hold` (abstain). */
   readonly wrap?: string;
-  /** A controller that supplies this track's clock — a click, a cursor, a spring.
-   *  Named here, resolved at bind against the user's `controllers` map. */
-  readonly controller?: string;
+}
+
+/**
+ * One placement inside a controller: a clip it references, and the `offset` that
+ * both positions and scales it. The controller reads its source value `v` and
+ * samples the clip at `u = v / offset` — so `offset` is the source value where
+ * the clip's `u = 1` (full extreme) lands, and its sign mirrors the clip onto the
+ * other side of centre. A left-look clip placed at `offset -1` reaches `u = 1`
+ * when the cursor is at `-1`, and abstains (via the clip's `hold`) on the right.
+ * `scale` is reserved.
+ */
+interface Placement {
+  readonly clip: string;
+  readonly offset: number;
+  readonly scale?: number;
 }
 
 /**
@@ -78,9 +94,6 @@ interface MixData {
   readonly mix: readonly string[];
   readonly by: string;
 }
-
-/** A named animation is a leaf (keyframes/generator) or an interior mix node. */
-type NodeData = TrackData | MixData;
 
 /** One key, unwrapped to its value and (optional) handles. */
 const key = (raw: KeyVal): KeyData => (typeof raw === "object" ? raw : { value: raw });
@@ -142,13 +155,13 @@ const buildGen = (cd: { fn: string } & KnobEnv): Knob => {
  * property inspector and the analyzer, and NEVER by the evaluator — it is chrome
  * and intent, not mechanism.
  *  - `coordinate`: a value swept along a shared ruler. `range` is that ruler (the
- *    axis keys are placed against, declared once here, not per key); `default` is
- *    the rest value (and doubles as the abstain value); `step` an optional snap.
+ *    range clips are placed against); `default` is the rest value (and doubles as
+ *    the abstain value); `step` an optional snap.
  *  - `clock`: a time source read *through* a clip. It has no coordinate ruler —
  *    a scrubber's bounds are the clip's own key span. `gate: "trigger"` means it
  *    abstains until fired (rest *is* abstain, so there is no `default`); `"free"`
  *    runs continuously.
- *  - `weights`: a fader bank feeding a `mix`/`by`. Reserved — no `by`-as-data yet.
+ *  - `weights`: a fader bank feeding a `mix`/`by`. It places no clips of its own.
  */
 export type EditorData =
   | {
@@ -162,42 +175,48 @@ export type EditorData =
   | { readonly as: "weights"; readonly label?: string };
 
 /**
- * A controller *declaration* — the signature of an impure leaf. `kind` is the
- * runtime **currency**: the only field the evaluator would ever branch on
- * (`number` today; `weights` reserved for when `by` becomes data). It is written
- * for completeness but not yet enforced — we adopt the factoring without pre-
- * paying the currency split. `editor` is the authoring model above. The host
- * still supplies the actual `t → value` closure at bind; this declares *what*
- * the rig expects, the closure is *how* it is produced — the signature, not the
- * body. Declaring controllers here makes a rig self-describing: the `.jsonc`
- * alone tells an editor (or a reader) exactly what inputs to feed it.
+ * A controller *declaration* — a named coordinate that references clips and
+ * places them. `kind` is the runtime **currency**: the only field the evaluator
+ * branches on (`number` for a coordinate/clock, `weights` for a `by`). `editor`
+ * is the authoring model above. `clips` are the placements a coordinate/clock
+ * controller folds — each a clip plus the `offset` that positions and scales it;
+ * a `weights` controller omits `clips` (it feeds a `mix`/`by` instead). The host
+ * still supplies the actual `t → value` closure (the *source*) at bind against
+ * the `controllers` option, keyed by the same name; this declares *what* the rig
+ * expects, the closure is *how* the value is produced. Declaring controllers here
+ * makes a rig self-describing: the `.jsonc` alone tells an editor (or a reader)
+ * exactly what inputs to feed it, and which clips each drives.
  */
 export interface ControllerData {
   readonly kind?: "number" | "weights";
   readonly editor: EditorData;
+  readonly clips?: readonly Placement[];
 }
 
 /**
- * The rig: a skeleton, its skin, named animations, and the controller inputs its
- * animations name — the art itself lives in a separate SVG. Anything omitted is a
- * default; anything at rest is simply left unsaid.
+ * The rig: a skeleton, its skin, a library of atomic `clips`, the `controllers`
+ * that place those clips on a coordinate, and any interior `mixes` that fan
+ * several nodes together — the art itself lives in a separate SVG. Anything
+ * omitted is a default; anything at rest is simply left unsaid.
  */
 export interface RigData {
   readonly svg?: string;
   readonly bones?: Readonly<Record<string, Bone>>;
   readonly skin?: SkinMap;
-  readonly animations?: Readonly<Record<string, NodeData>>;
+  readonly clips?: Readonly<Record<string, ClipData>>;
   readonly controllers?: Readonly<Record<string, ControllerData>>;
+  readonly mixes?: Readonly<Record<string, MixData>>;
 }
 
 /**
  * The impure leaves, supplied by the host: a name → a `t → value` closure that
  * may read live state (a click, the cursor) and abstain with `undefined`. This
- * is the *only* place the outside world enters — the same resolver a track's
- * `controller` names for its clock, and the same map a caller threads by hand
- * into a blendspace coordinate. Provision is uniform; only who reads it varies.
+ * is the *only* place the outside world enters. Each name matches a declared
+ * controller: a coordinate/clock source returns a `number`, a `by` source a
+ * `{ input → weight }` map; either abstains with `undefined`. Provision is
+ * uniform; only who reads it varies.
  */
-export type Controllers = Readonly<Record<string, Controller>>;
+export type Controllers = Readonly<Record<string, Source>>;
 
 /** Host-supplied bindings for a rig: the controllers its JSON names. */
 export interface RigOptions {
@@ -206,10 +225,12 @@ export interface RigOptions {
 
 export interface Rig {
   readonly skeleton: Skeleton;
-  readonly tracks: Readonly<Record<string, Track>>;
-  /** Every named animation as a ready lambda — a leaf track read as a clip, or an
-   *  interior `mix` node folded through its controller. This is the play API: the
-   *  caller threads the clock (`anims.lookAt(ms)`) and blends the results. */
+  /** The atomic clip data, by name — for tests and introspection. */
+  readonly clips: Readonly<Record<string, Clip>>;
+  /** Every playable node as a ready lambda — an atomic clip read directly, a
+   *  controller that places its clips on a coordinate, or an interior `mix` node
+   *  folded through its `by` controller. This is the play API: the caller threads
+   *  the clock (`anims.gazeX(ms)`) and blends the results with `mix(...)`. */
   readonly anims: Readonly<Record<string, Anim>>;
   /** Headless: bind to an SVG document's text, get back a pose→art evaluator. */
   bind(svg: string): Puppet;
@@ -278,7 +299,7 @@ const reconcile = (from: string, to: string): [base: string, morphed: string] =>
  * here and reconcile the two shapes against the bound art there.
  */
 interface Morph {
-  readonly channels: Record<string, Channel>; // the track's own bag, filled at bind
+  readonly channels: Record<string, Channel>; // the clip's own bag, filled at bind
   readonly key: string; // the object this shape channel drives
   readonly times: readonly number[]; // keyframe times
   readonly refs: readonly string[]; // per key: the object it becomes (self = rest)
@@ -293,7 +314,7 @@ interface Morph {
  * must supply an explicit key at weight 0.
  */
 interface Paint {
-  readonly channels: Record<string, Channel>; // the track's own bag, filled at bind
+  readonly channels: Record<string, Channel>; // the clip's own bag, filled at bind
   readonly key: string; // the pose channel, e.g. "eyeR.fill"
   readonly obj: string; // the object it paints, e.g. "eyeR"
   readonly attr: string; // the attribute it drives, e.g. "fill"
@@ -344,12 +365,10 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
   const skeleton: Skeleton = data.bones ?? {};
 
   // Controller declarations, validated once. A rig *may* declare its controllers
-  // (name → currency + authoring editor); when it does, the declarations are
-  // authoritative — every controller an animation names must appear here, so a
-  // typo (`over: "gazX"`) is a load error rather than a silent dead input. The
-  // block is optional: a rig that omits it keeps the old convention (names are
-  // resolved straight against the host map). Currency (`kind`) is recorded but
-  // not yet enforced — the `weights` branch doesn't exist until `by` is data.
+  // (name → currency + authoring editor + the clips it places); when it does, the
+  // declarations are authoritative — every controller a `by` names must appear
+  // here, so a typo is a load error rather than a silent dead input. The block is
+  // optional. Currency (`kind`) is recorded but not yet enforced.
   const decls = data.controllers;
   if (decls) {
     for (const n in decls) {
@@ -367,67 +386,24 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
       throw new Error(`articul8: ${site} names controller "${name}" not declared in \`controllers\``);
   };
 
-  const tracks: Record<string, Track> = {};
+  const clips: Record<string, Clip> = {};
   const morphs: Morph[] = [];
   const paints: Paint[] = [];
-  // An axis channel names other animations, which the graph resolves *after*
-  // every track is built; so the parse loop leaves a placeholder and records a
-  // stub, wired to live children in `resolve` below (cycle-guarded there).
-  interface AxisStub {
-    readonly track: string;
-    readonly channel: string;
-    readonly over: string;
-    readonly wrap: Wrap;
-    readonly stops: number[];
-    readonly children: string[];
-    readonly eases: Ease[];
-  }
-  const axisStubs: AxisStub[] = [];
 
-  for (const name in data.animations) {
-    const node = data.animations[name]!;
-    if ("mix" in node) continue; // an interior node carries no channels — built below
+  for (const name in data.clips) {
+    const node = data.clips[name]!;
     const channels: Record<string, Channel> = {};
-    let duration = 0;
+    let span = 0;
     const src = node.channels;
     for (const c in src) {
       const cd = src[c]!;
 
-      // An axis channel reads a coordinate, not the clock: its keys are positions
-      // and each value names a whole animation. It borrows the channel key-list
-      // machinery (positions sort, handles ease the crossfade) but lends the
-      // track no duration — its children own their own spans. Children are other
-      // nodes, resolved once the graph exists; record a stub and stand a
-      // placeholder in the bag so nothing downstream mistakes it for keys.
-      if ("over" in cd) {
-        const e = entriesOf(cd.keys);
-        if (e.some((x) => typeof x.v !== "string"))
-          throw new Error(`articul8: axis channel "${c}" keys must each name an animation`);
-        let w: Wrap = hold;
-        if (cd.wrap) {
-          const found = wraps[cd.wrap];
-          if (!found) throw new Error(`articul8: axis channel "${c}" names no wrap "${cd.wrap}"`);
-          w = found;
-        }
-        channels[c] = { times: [], values: [] }; // placeholder, wired at resolve
-        axisStubs.push({
-          track: name,
-          channel: c,
-          over: cd.over,
-          wrap: w,
-          stops: e.map((x) => x.t),
-          children: e.map((x) => x.v as string),
-          eases: easesOf(e),
-        });
-        continue;
-      }
-
       // A `fn` channel is a procedural wave, not stored keys: build the named
       // generator (its knobs may themselves be waves or key lists) and let it
       // vote every frame. A wave is born infinite — it owns no span and lends
-      // the track no duration, and `sample` hands it the raw absolute clock,
-      // never the track's wrap — so it reads time exactly as authored (freq in
-      // real Hz) whether or not any keyframe channel beside it loops.
+      // the clip no span, and `sampleClip` hands it the raw parameter, never the
+      // clip's wrap — so it reads its coordinate exactly as authored whether or
+      // not any keyframe channel beside it loops.
       if ("fn" in cd) {
         channels[c] = { times: [], values: [], fn: buildGen(cd) };
         continue;
@@ -446,7 +422,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
       if (dot >= 0 && !transform) {
         channels[c] = { times: [], values: [] }; // placeholder, resolved at bind
         paints.push({ channels, key: c, obj: c.slice(0, dot), attr: prop, entries });
-        duration = Math.max(duration, entries[entries.length - 1]?.t ?? 0);
+        span = Math.max(span, entries[entries.length - 1]?.t ?? 0);
         continue;
       }
 
@@ -467,51 +443,75 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
           refs: geo.map((e) => e.v),
           eases: easesOf(geo),
         });
-        duration = Math.max(duration, geo[geo.length - 1]!.t);
+        span = Math.max(span, geo[geo.length - 1]!.t);
         continue;
       }
 
       const times = entries.map((e) => e.t);
       channels[c] = { times, values: entries.map((e) => e.v as number), eases: easesOf(entries) };
-      duration = Math.max(duration, times[times.length - 1] ?? 0);
+      span = Math.max(span, times[times.length - 1] ?? 0);
     }
     let wrap: Wrap | undefined;
     if (node.wrap) {
       wrap = wraps[node.wrap];
-      if (!wrap) throw new Error(`articul8: track "${name}" names no wrap "${node.wrap}"`);
+      if (!wrap) throw new Error(`articul8: clip "${name}" names no wrap "${node.wrap}"`);
     }
-    let coord: Controller | undefined;
-    if (node.controller) {
-      requireDeclared(node.controller, `track "${name}"`);
-      coord = opts.controllers?.[node.controller];
-      if (!coord) throw new Error(`articul8: track "${name}" names no controller "${node.controller}"`);
-    }
-    tracks[name] = { duration, channels, wrap, coord };
+    clips[name] = { channels, wrap, span };
   }
 
   /**
-   * The animation graph as ready lambdas. A leaf is just its track read as a
-   * clip; an interior `mix` node fans in its named inputs and folds them through
-   * its controller. `resolve` builds lazily and memoises, so a node names its
-   * children by string and the wiring is order-free (and cycles are caught). The
-   * node is oblivious to what its inputs carry — it only ever calls `blend`.
+   * Every playable node as a ready lambda, built lazily and memoised so a node
+   * names its children by string and the wiring is order-free (cycles caught):
+   *   • a **clip** reads directly as `clip(data)` — a pure `parameter → Pose`.
+   *   • a **controller** reads its source `v` and folds its placed clips: each is
+   *     sampled at `u = v / offset`, then `blend`ed at equal weight (the abstain +
+   *     carrier-normalization laws make two half-axis clips resolve to one value).
+   *   • an interior **mix** node fans in its inputs and folds them through its
+   *     `by` controller's per-input weights.
+   * Clip / controller / mix names share one namespace; a collision is a build
+   * error, so `resolve` looks each name up in exactly one map.
    */
   const anims: Record<string, Anim> = {};
   const building = new Set<string>();
+
+  const controllerSource = (name: string, site: string): Source => {
+    requireDeclared(name, site);
+    const src = opts.controllers?.[name];
+    if (!src) throw new Error(`articul8: ${site} names controller "${name}" with no source supplied`);
+    return src;
+  };
+
   const resolve = (name: string): Anim => {
     if (anims[name]) return anims[name]!;
-    const node = data.animations?.[name];
-    if (!node) throw new Error(`articul8: node "${name}" not found`);
     if (building.has(name)) throw new Error(`articul8: node "${name}" is cyclic`);
     building.add(name);
     let anim: Anim;
-    if ("mix" in node) {
+
+    if (name in clips) {
+      anim = clip(clips[name]!);
+    } else if (decls && name in decls && decls[name]!.clips) {
+      // A controller: place its clips on the coordinate its source returns.
+      const decl = decls[name]!;
+      const placed = decl.clips!.map((p) => {
+        if (!(p.clip in clips))
+          throw new Error(`articul8: controller "${name}" places unknown clip "${p.clip}"`);
+        return { anim: resolve(p.clip), offset: p.offset };
+      });
+      const src = controllerSource(name, `controller "${name}"`);
+      const ones = placed.map(() => 1);
+      anim = (t) => {
+        const v = src(t);
+        if (v === undefined) return {}; // the source abstains → the controller abstains
+        if (typeof v !== "number")
+          throw new Error(`articul8: controller "${name}" must return a coordinate, not weights`);
+        return blend(placed.map((p) => p.anim(v / p.offset)), ones);
+      };
+    } else if (data.mixes && name in data.mixes) {
+      const node = data.mixes[name]!;
       const inputs = node.mix;
       const set = new Set(inputs);
-      const children = inputs.map(resolve); // may name leaves or other mix nodes
-      requireDeclared(node.by, `node "${name}"`);
-      const by = opts.controllers?.[node.by];
-      if (!by) throw new Error(`articul8: node "${name}" names no controller "${node.by}"`);
+      const children = inputs.map(resolve); // may name clips, controllers, or other mixes
+      const by = controllerSource(node.by, `node "${name}"`);
       anim = (t) => {
         const w = by(t);
         if (w === undefined) return {}; // the controller abstains → the node abstains
@@ -524,63 +524,16 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
         return blend(children.map((c) => c(t)), inputs.map((k) => w[k]!));
       };
     } else {
-      // A leaf. First wire any axis channels: each names other animations, now
-      // resolvable through this very function — so `resolve` recurses, and its
-      // `building` guard catches an axis that (through any depth) reads itself.
-      const track = tracks[name]!;
-      for (const stub of axisStubs) {
-        if (stub.track !== name) continue;
-        requireDeclared(stub.over, `axis channel "${stub.channel}" of "${name}"`);
-        const over = opts.controllers?.[stub.over];
-        if (!over)
-          throw new Error(`articul8: axis channel "${stub.channel}" of "${name}" names no controller "${stub.over}"`);
-        const children = stub.children.map(resolve);
-        (track.channels as Record<string, Channel>)[stub.channel] = {
-          times: [],
-          values: [],
-          axis: { over, wrap: stub.wrap, stops: stub.stops, children, eases: stub.eases },
-        };
-      }
-      anim = clip(track);
+      throw new Error(`articul8: node "${name}" not found`);
     }
+
     building.delete(name);
     return (anims[name] = anim);
   };
-  for (const name in data.animations) resolve(name);
 
-  /**
-   * No-vote disjointness, checked once at load. A leaf track's channels must
-   * drive *disjoint* pose slots: a scalar/geometry/paint channel owns the one
-   * slot named by its key, an axis owns the union of its children's slots (and a
-   * child may itself be a mix or another axis, so we recurse the authored
-   * graph). Two channels reaching the same slot would silently fight — the last
-   * writer winning — so an *intended* overlap must instead go through a `mix`
-   * node's `by`, where the weights that resolve it are explicit. Every slot is
-   * visible from the JSON alone, so the editor can enforce this keystroke by
-   * keystroke; here we enforce it at build.
-   *
-   * The slots themselves come from the shared `analyze` pass — the same
-   * structural read the editor uses — so this law is stated once, in one place,
-   * and the loader merely enforces it. (`resolve` above has already thrown on any
-   * cycle or missing reference, so the model here is whole.)
-   */
-  const model = analyze(data);
-  for (const name in data.animations) {
-    const node = data.animations[name]!;
-    if ("mix" in node) continue;
-    const channels = model.nodes[name]!.channels!;
-    const claimed = new Map<string, string>(); // slot → the channel that first drove it
-    for (const c in node.channels) {
-      for (const s of channels[c]!.slots) {
-        const prev = claimed.get(s);
-        if (prev && prev !== c)
-          throw new Error(
-            `articul8: channels "${prev}" and "${c}" of "${name}" both drive "${s}" — an overlap needs an explicit \`mix\`/\`by\``,
-          );
-        claimed.set(s, c);
-      }
-    }
-  }
+  for (const name in clips) resolve(name);
+  if (decls) for (const name in decls) if (decls[name]!.clips) resolve(name);
+  if (data.mixes) for (const name in data.mixes) resolve(name);
 
   const bindEls = (els: Obj[]): Puppet => {
     const ids: Record<string, number> = {};
@@ -664,10 +617,10 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
     // Reconciliation guarantees a geometry channel carries exactly its object's
     // point vector; assert it, so a future change can't silently break skinning.
     // Dotted channels are paint, not geometry — they name no path, so skip them.
-    for (const name in tracks)
-      for (const c in tracks[name]!.channels) {
+    for (const name in clips)
+      for (const c in clips[name]!.channels) {
         if (c.includes(".")) continue;
-        const v0 = tracks[name]!.channels[c]!.values[0];
+        const v0 = clips[name]!.channels[c]!.values[0];
         if (!Array.isArray(v0)) continue;
         const need = parsed[ref(c)]!.points.length * 2;
         if (v0.length !== need)
@@ -710,5 +663,5 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
     return { render: (pose) => draw(pose) };
   }
 
-  return { skeleton, tracks, anims, bind };
+  return { skeleton, clips, anims, bind };
 }

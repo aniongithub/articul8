@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { analyze } from "../src/analyze";
 
 describe("analyze · structural model (the runtime read without binding)", () => {
-  it("reports each leaf channel's kind and slot", () => {
+  it("reports each clip channel's kind and slot", () => {
     const m = analyze({
-      animations: {
-        clip: {
+      clips: {
+        c: {
           channels: {
             "head.x": { keys: { "0": 0, "1": 10 } },
             wobble: { fn: "sine", amp: 3 },
@@ -13,36 +13,43 @@ describe("analyze · structural model (the runtime read without binding)", () =>
         },
       },
     });
-    const clip = m.nodes["clip"]!;
-    expect(clip.kind).toBe("leaf");
-    expect(clip.channels!["head.x"]).toMatchObject({ kind: "keys", slots: ["head.x"] });
-    expect(clip.channels!["wobble"]).toMatchObject({ kind: "fn", slots: ["wobble"] });
-    expect([...clip.slots].sort()).toEqual(["head.x", "wobble"]);
+    const c = m.nodes["c"]!;
+    expect(c.kind).toBe("clip");
+    expect(c.channels!["head.x"]).toMatchObject({ kind: "keys", slots: ["head.x"] });
+    expect(c.channels!["wobble"]).toMatchObject({ kind: "fn", slots: ["wobble"] });
+    expect([...c.slots].sort()).toEqual(["head.x", "wobble"]);
+    expect(c.refs).toEqual([]);
   });
 
-  it("an axis channel owns the union of its children's slots and names them as refs", () => {
+  it("a controller owns the union of its placed clips' slots and names them as refs", () => {
     const m = analyze({
-      animations: {
+      clips: {
         lo: { channels: { "head.x": { keys: { "0": 0 } }, "head.y": { keys: { "0": 0 } } } },
         hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-        gait: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
+      },
+      controllers: {
+        gazeX: {
+          editor: { as: "coordinate", range: [-1, 1] },
+          clips: [
+            { clip: "lo", offset: -1 },
+            { clip: "hi", offset: 1 },
+          ],
+        },
       },
     });
-    const g = m.nodes["gait"]!.channels!["g"]!;
-    expect(g.kind).toBe("axis");
-    expect(g.over).toBe("x");
-    expect(g.refs).toEqual(["lo", "hi"]);
+    const g = m.nodes["gazeX"]!;
+    expect(g.kind).toBe("controller");
+    expect([...g.refs].sort()).toEqual(["hi", "lo"]);
     expect([...g.slots].sort()).toEqual(["head.x", "head.y"]); // union of lo ∪ hi
-    expect([...m.nodes["gait"]!.refs].sort()).toEqual(["hi", "lo"]);
   });
 
   it("a mix node's slots are the union of its inputs and refs are the inputs", () => {
     const m = analyze({
-      animations: {
+      clips: {
         a: { channels: { "jaw.rotation": { keys: { "0": 0 } } } },
         b: { channels: { "ear.rotation": { keys: { "0": 0 } } } },
-        blend: { mix: ["a", "b"], by: "w" },
       },
+      mixes: { blend: { mix: ["a", "b"], by: "w" } },
     });
     const node = m.nodes["blend"]!;
     expect(node.kind).toBe("mix");
@@ -53,25 +60,34 @@ describe("analyze · structural model (the runtime read without binding)", () =>
 
   it("records every controller usage with its seam", () => {
     const m = analyze({
-      animations: {
+      clips: {
         lo: { channels: { "head.x": { keys: { "0": 0 } } } },
         hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-        beat: { controller: "clock", channels: { "eye.sy": { keys: { "0": 1, "300": 0.2 } } } },
-        gait: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
-        blend: { mix: ["lo", "hi"], by: "w" },
+        beat: { channels: { "eye.sy": { keys: { "0": 1, "300": 0.2 } } } },
       },
+      controllers: {
+        heartClock: { editor: { as: "clock" }, clips: [{ clip: "beat", offset: 300 }] },
+        gazeX: {
+          editor: { as: "coordinate", range: [-1, 1] },
+          clips: [
+            { clip: "lo", offset: -1 },
+            { clip: "hi", offset: 1 },
+          ],
+        },
+      },
+      mixes: { blend: { mix: ["lo", "hi"], by: "w" } },
     });
     const byUse = Object.fromEntries(m.usages.map((u) => [u.use, u]));
-    expect(byUse["clock"]).toMatchObject({ name: "clock", node: "beat" });
-    expect(byUse["coordinate"]).toMatchObject({ name: "x", node: "gait", channel: "g" });
+    expect(byUse["clock"]).toMatchObject({ name: "heartClock", node: "heartClock" });
+    expect(byUse["coordinate"]).toMatchObject({ name: "gazeX", node: "gazeX" });
     expect(byUse["weights"]).toMatchObject({ name: "w", node: "blend" });
   });
 
   it("detects a reference cycle without throwing", () => {
     const m = analyze({
-      animations: {
-        a: { channels: { g: { over: "x", keys: { "0": "b" } } } },
-        b: { channels: { g: { over: "x", keys: { "0": "a" } } } },
+      mixes: {
+        a: { mix: ["b"], by: "w" },
+        b: { mix: ["a"], by: "w" },
       },
     });
     expect(m.cycles.length).toBeGreaterThan(0);
@@ -80,10 +96,10 @@ describe("analyze · structural model (the runtime read without binding)", () =>
 
   it("leaves a dangling reference in refs with no slots, rather than throwing", () => {
     const m = analyze({
-      animations: { gait: { channels: { g: { over: "x", keys: { "0": "ghost" } } } } },
+      mixes: { blend: { mix: ["ghost"], by: "w" } },
     });
-    expect(m.nodes["gait"]!.refs).toEqual(["ghost"]);
-    expect(m.nodes["gait"]!.channels!["g"]!.slots).toEqual([]); // ghost contributes nothing
+    expect(m.nodes["blend"]!.refs).toEqual(["ghost"]);
+    expect(m.nodes["blend"]!.slots).toEqual([]); // ghost contributes nothing
     expect(m.cycles).toEqual([]);
   });
 
@@ -91,28 +107,26 @@ describe("analyze · structural model (the runtime read without binding)", () =>
     const m = analyze({
       controllers: {
         heartClock: { editor: { as: "clock", gate: "trigger" } },
-        x: { editor: { as: "coordinate", range: [-1, 1] } },
+        w: { editor: { as: "clock" } }, // declared a clock but read as weights below
       },
-      animations: {
+      clips: {
         lo: { channels: { "head.x": { keys: { "0": 0 } } } },
         hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-        // reads the clock as a coordinate — legal, but against the grain
-        gait: { channels: { g: { over: "heartClock", keys: { "0": "lo", "1": "hi" } } } },
-        // reads the coordinate as a coordinate — clean
-        ok: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
       },
+      // reads `w` (declared clock) as a mix's weights — legal, but against the grain
+      mixes: { blend: { mix: ["lo", "hi"], by: "w" } },
     });
     expect(m.diagnostics).toHaveLength(1);
-    expect(m.diagnostics[0]).toMatchObject({ code: "role-mismatch", controller: "heartClock", node: "gait" });
+    expect(m.diagnostics[0]).toMatchObject({ code: "role-mismatch", controller: "w", node: "blend" });
   });
 
   it("emits no diagnostics when there is no controllers block to check against", () => {
     const m = analyze({
-      animations: {
+      clips: {
         lo: { channels: { "head.x": { keys: { "0": 0 } } } },
         hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-        gait: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
       },
+      mixes: { blend: { mix: ["lo", "hi"], by: "w" } },
     });
     expect(m.diagnostics).toEqual([]);
   });

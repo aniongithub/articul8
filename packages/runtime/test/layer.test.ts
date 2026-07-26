@@ -1,15 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { clip, sampler, place, axis, mix, hold, clamp, loop, pingpong } from "../src/layer";
-import { type Track } from "../src/track";
+import { type Clip } from "../src/track";
 
 // A one-unit clip authored rest(0) -> full(1) on a single channel.
-const ramp: Track = {
-  duration: 1,
+const ramp: Clip = {
+  span: 1,
   channels: { "eye.x": { times: [0, 1], values: [0, 10] } },
 };
 
 describe("clip", () => {
-  it("reads a track over its own [0,1]", () => {
+  it("reads a clip over its own [0,1]", () => {
     expect(clip(ramp)(0)["eye.x"]).toBeCloseTo(0);
     expect(clip(ramp)(0.5)["eye.x"]).toBeCloseTo(5);
     expect(clip(ramp)(1)["eye.x"]).toBeCloseTo(10);

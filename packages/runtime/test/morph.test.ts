@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { blend } from "../src/pose";
-import { sample } from "../src/track";
+import { sampleClip } from "../src/track";
 import { rig } from "../src/rig";
 
 // Morph is not a new subsystem — it is the same channel, now carrying a vector.
@@ -45,7 +45,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
   const eye = "M0,0 L10,0 L5,10 Z";
   const heart = "M0,4 C0,0 -4,-2 -6,1 C-9,5 -3,9 0,12 C3,9 9,5 6,1 C4,-2 0,0 0,4 Z";
   const svg = `<svg><path id="eye" d="${eye}"/><path id="heart" style="display:none" d="${heart}"/></svg>`;
-  const data = { animations: { m: { channels: { eye: { keys: { "1": "heart" } } } } } };
+  const data = { clips: { m: { channels: { eye: { keys: { "1": "heart" } } } } } };
 
   it("reconciles the two shapes instead of rejecting a topology mismatch", () => {
     expect(() => rig(data).bind(svg)).not.toThrow();
@@ -54,7 +54,7 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
   it("fills the channel with one shared topology, rest → target", () => {
     const r = rig(data);
     r.bind(svg);
-    const ch = r.tracks.m!.channels.eye!;
+    const ch = r.clips.m!.channels.eye!;
     expect(ch.times).toEqual([0, 1]);
     const [rest, target] = ch.values as number[][];
     expect(rest.length).toBe(target.length);
@@ -65,15 +65,15 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
   it("samples the reconciled rest at weight 0 and the target at weight 1", () => {
     const r = rig(data);
     r.bind(svg);
-    const t = r.tracks.m!;
-    const at0 = sample(t, 0).eye as number[];
-    const at1 = sample(t, 1).eye as number[];
+    const t = r.clips.m!;
+    const at0 = sampleClip(t, 0).eye as number[];
+    const at1 = sampleClip(t, 1).eye as number[];
     expect(at0.length).toBe(at1.length);
     expect(at0).not.toEqual(at1);
   });
 
   it("errors clearly when a keyframe names no object", () => {
-    const bad = { animations: { m: { channels: { eye: { keys: { "1": "ghost" } } } } } };
+    const bad = { clips: { m: { channels: { eye: { keys: { "1": "ghost" } } } } } };
     expect(() => rig(bad).bind(`<svg><path id="eye" d="${eye}"/></svg>`)).toThrow(/names no object/);
   });
 
@@ -81,24 +81,24 @@ describe("morph · reconcile at bind (the lib matches unrelated shapes)", () => 
     // The eye names *itself* at 0 and 1 and the heart at the midpoint — a whole
     // bloom-and-settle clip, no code, still one target and one shared topology.
     const trip = {
-      animations: { m: { channels: { eye: { keys: { "0": "eye", "0.5": "heart", "1": "eye" } } } } },
+      clips: { m: { channels: { eye: { keys: { "0": "eye", "0.5": "heart", "1": "eye" } } } } },
     };
     const r = rig(trip);
     r.bind(svg);
-    const ch = r.tracks.m!.channels.eye!;
+    const ch = r.clips.m!.channels.eye!;
     expect(ch.times).toEqual([0, 0.5, 1]);
     const [a, b, c] = ch.values as number[][];
     expect(a).toEqual(c); // both ends are the very same rest vector
     expect(a).not.toEqual(b); // the middle is the reconciled target
-    const t = r.tracks.m!;
-    expect(sample(t, 0).eye).toEqual(a);
-    expect(sample(t, 0.5).eye).toEqual(b);
-    expect(sample(t, 1).eye).toEqual(c);
+    const t = r.clips.m!;
+    expect(sampleClip(t, 0).eye).toEqual(a);
+    expect(sampleClip(t, 0.5).eye).toEqual(b);
+    expect(sampleClip(t, 1).eye).toEqual(c);
   });
 
   it("refuses a morph that blooms to more than one distinct target", () => {
     const two = {
-      animations: { m: { channels: { eye: { keys: { "0.5": "heart", "1": "star" } } } } },
+      clips: { m: { channels: { eye: { keys: { "0.5": "heart", "1": "star" } } } } },
     };
     const art = `<svg><path id="eye" d="${eye}"/><path id="heart" d="${heart}"/><path id="star" d="${eye}"/></svg>`;
     expect(() => rig(two).bind(art)).toThrow(/one for now/);

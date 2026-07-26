@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { linear, bezier, segment, type Handle } from "../src/ease";
-import { sample, type Track } from "../src/track";
+import { sampleClip, type Clip } from "../src/track";
 
 // An easing is a reparam of the unit interval that fixes both ends. So every
 // curve must agree at 0 and 1 — they only disagree on *how* they cross between.
@@ -62,29 +62,29 @@ describe("ease · segment from two handles", () => {
 // The payoff: an easing bends the *timing* of a tween, not its values. A channel
 // with an `in` easing lands the same 0 and 10, but reads low at the midpoint.
 
-describe("ease · sample bends a channel's fraction", () => {
-  const eased: Track = {
-    duration: 1,
+describe("ease · sampleClip bends a channel's fraction", () => {
+  const eased: Clip = {
+    span: 1,
     channels: { a: { times: [0, 1], values: [0, 10], eases: [easeIn] } },
   };
-  const plain: Track = {
-    duration: 1,
+  const plain: Clip = {
+    span: 1,
     channels: { a: { times: [0, 1], values: [0, 10] } },
   };
 
   it("agrees at the keys, differs between them", () => {
-    expect(sample(eased, 0).a).toBe(0);
-    expect(sample(eased, 1).a).toBe(10);
-    expect(sample(eased, 0.5).a as number).toBeLessThan(5); // eased below linear
-    expect(sample(plain, 0.5).a).toBeCloseTo(5);
+    expect(sampleClip(eased, 0).a).toBe(0);
+    expect(sampleClip(eased, 1).a).toBe(10);
+    expect(sampleClip(eased, 0.5).a as number).toBeLessThan(5); // eased below linear
+    expect(sampleClip(plain, 0.5).a).toBeCloseTo(5);
   });
 
   it("bends a vector value by the very same fraction, elementwise", () => {
-    const t: Track = {
-      duration: 1,
+    const t: Clip = {
+      span: 1,
       channels: { p: { times: [0, 1], values: [[0, 0], [10, 20]], eases: [easeIn] } },
     };
-    const [x, y] = sample(t, 0.5).p as number[];
+    const [x, y] = sampleClip(t, 0.5).p as number[];
     expect(y).toBeCloseTo(2 * x!); // same fraction on both components
   });
 });

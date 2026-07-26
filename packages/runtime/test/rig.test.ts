@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { rig } from "../src/rig";
-import { sample } from "../src/track";
+import { sampleClip } from "../src/track";
 
 // Two paths; the second is bound rigidly to `head`, whose joint sits at the
 // origin. A 90° turn should carry its points a quarter turn about (0,0).
@@ -36,7 +36,7 @@ describe("rig · skin (end to end)", () => {
 
   it("carries per-keyframe Bézier handles from JSON through to eased sampling", () => {
     const eased = rig({
-      animations: {
+      clips: {
         move: {
           channels: {
             // key 0 leaves slowly (out handle pulled flat), so the midpoint reads low
@@ -44,37 +44,99 @@ describe("rig · skin (end to end)", () => {
           },
         },
       },
-    }).tracks["move"]!;
+    }).clips["move"]!;
     const plain = rig({
-      animations: { move: { channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } },
-    }).tracks["move"]!;
-    expect(sample(eased, 0)["head.x"]).toBe(0);
-    expect(sample(eased, 1000)["head.x"]).toBe(10);
-    expect(sample(eased, 500)["head.x"] as number).toBeLessThan(5); // eased below the linear 5
-    expect(sample(plain, 500)["head.x"]).toBeCloseTo(5);
+      clips: { move: { channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } },
+    }).clips["move"]!;
+    expect(sampleClip(eased, 0)["head.x"]).toBe(0);
+    expect(sampleClip(eased, 1000)["head.x"]).toBe(10);
+    expect(sampleClip(eased, 500)["head.x"] as number).toBeLessThan(5); // eased below the linear 5
+    expect(sampleClip(plain, 500)["head.x"]).toBeCloseTo(5);
   });
+});
 
-  it("resolves a track's named controller to the host closure that clocks it", () => {
-    // The JSON only names `clock`; the host supplies the closure — an impure leaf
-    // remapping the clock (offset by 200 ms) enters an otherwise pure track.
-    const track = rig(
-      {
-        animations: {
-          move: { controller: "clock", channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } },
+// A controller places clips on a coordinate. The gaze layout: two canonical
+// clips, each rest(0)→extreme(1), placed at offset ∓1 so the cursor value `v`
+// samples each at `u = v / offset`. The two half-axes resolve to one value by
+// the abstain (hold past the edge) + carrier-normalized blend laws.
+const gaze = (v: number | undefined) =>
+  rig(
+    {
+      clips: {
+        gazeLeft: { channels: { "eye.x": { keys: { "0": 0, "1": -10 } } } },
+        gazeRight: { channels: { "eye.x": { keys: { "0": 0, "1": 10 } } } },
+      },
+      controllers: {
+        gazeX: {
+          kind: "number",
+          editor: { as: "coordinate", range: [-1, 1], default: 0 },
+          clips: [
+            { clip: "gazeLeft", offset: -1 },
+            { clip: "gazeRight", offset: 1 },
+          ],
         },
       },
-      { controllers: { clock: (t) => t - 200 } },
-    ).tracks["move"]!;
-    expect(sample(track, 200)["head.x"]).toBeCloseTo(0); // u = 0
-    expect(sample(track, 1200)["head.x"]).toBeCloseTo(10); // u = 1000
+    },
+    { controllers: { gazeX: () => v } },
+  ).anims["gazeX"]!(0);
+
+describe("rig · controller (places clips on a coordinate)", () => {
+  it("reaches each clip's extreme at the coordinate its offset lands on", () => {
+    expect(gaze(-1)["eye.x"]).toBeCloseTo(-10); // gazeLeft at u=1
+    expect(gaze(1)["eye.x"]).toBeCloseTo(10); // gazeRight at u=1
   });
 
-  it("throws when a track names a controller the host never supplied", () => {
+  it("sits at rest at centre, where both halves agree at u=0", () => {
+    expect(gaze(0)["eye.x"]).toBeCloseTo(0);
+  });
+
+  it("reads one value from two half-axis clips (the lone in-range clip passes through)", () => {
+    expect(gaze(0.5)["eye.x"]).toBeCloseTo(5); // only gazeRight votes
+    expect(gaze(-0.5)["eye.x"]).toBeCloseTo(-5); // only gazeLeft votes
+  });
+
+  it("abstains entirely when its source abstains (undefined → no vote)", () => {
+    expect(gaze(undefined)).toEqual({});
+  });
+
+  it("clocks a clip through its offset — u = t / offset", () => {
+    // A clock controller places one clip and scrubs it by the raw clock: at
+    // offset 900 the clip's full extreme lands at t = 900 ms.
+    const heart = (t: number) =>
+      rig(
+        {
+          // A canonical [0,1] pulse; offset 900 lands its full extreme at t=900 ms.
+          clips: { pulse: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0, "1": 10 } } } } },
+          controllers: { heartClock: { editor: { as: "clock" }, clips: [{ clip: "pulse", offset: 900 }] } },
+        },
+        { controllers: { heartClock: (t) => t } },
+      ).anims["heartClock"]!(t);
+    expect(heart(0)["head.x"]).toBeCloseTo(0);
+    expect(heart(450)["head.x"]).toBeCloseTo(5);
+    expect(heart(900)["head.x"]).toBeCloseTo(10);
+  });
+
+  it("throws when a controller places a clip that does not exist", () => {
     expect(() =>
-      rig({
-        animations: { move: { controller: "missing", channels: { "head.x": { keys: { "0": 0 } } } } },
-      }),
-    ).toThrow(/controller "missing"/);
+      rig(
+        {
+          clips: { a: { channels: { "eye.x": { keys: { "0": 0 } } } } },
+          controllers: { c: { editor: { as: "coordinate" }, clips: [{ clip: "ghost", offset: 1 }] } },
+        },
+        { controllers: { c: () => 0 } },
+      ),
+    ).toThrow(/places unknown clip "ghost"/);
+  });
+
+  it("throws when its source returns weights instead of a coordinate", () => {
+    const bad = rig(
+      {
+        clips: { a: { channels: { "eye.x": { keys: { "0": 0, "1": 10 } } } } },
+        controllers: { c: { editor: { as: "coordinate" }, clips: [{ clip: "a", offset: 1 }] } },
+      },
+      { controllers: { c: () => ({ a: 1 }) as unknown as number } },
+    ).anims["c"]!;
+    expect(() => bad(0)).toThrow(/coordinate, not weights/);
   });
 });
 
@@ -84,11 +146,11 @@ describe("rig · skin (end to end)", () => {
 const fold = (w: Record<string, number> | undefined) =>
   rig(
     {
-      animations: {
+      clips: {
         lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
         hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
-        blend: { mix: ["lo", "hi"], by: "w" },
       },
+      mixes: { blend: { mix: ["lo", "hi"], by: "w" } },
     },
     { controllers: { w: () => w } },
   ).anims["blend"]!;
@@ -110,11 +172,11 @@ describe("rig · mix node (combinators as data)", () => {
     // path names or inspects the channel; the crossfade is identical.
     const node = rig(
       {
-        animations: {
+        clips: {
           lo: { wrap: "clamp", channels: { "jaw.rotation": { keys: { "0": -20 } } } },
           hi: { wrap: "clamp", channels: { "jaw.rotation": { keys: { "0": 20 } } } },
-          swing: { mix: ["lo", "hi"], by: "w" },
         },
+        mixes: { swing: { mix: ["lo", "hi"], by: "w" } },
       },
       { controllers: { w: () => ({ lo: 0.25, hi: 0.75 }) } },
     ).anims["swing"]!;
@@ -124,7 +186,10 @@ describe("rig · mix node (combinators as data)", () => {
   it("throws at build when a mix names an input that is no node", () => {
     expect(() =>
       rig(
-        { animations: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo", "ghost"], by: "w" } } },
+        {
+          clips: { lo: { channels: { "head.x": { keys: { "0": 0 } } } } },
+          mixes: { blend: { mix: ["lo", "ghost"], by: "w" } },
+        },
         { controllers: { w: () => ({}) } },
       ),
     ).toThrow(/"ghost" not found/);
@@ -132,7 +197,10 @@ describe("rig · mix node (combinators as data)", () => {
 
   it("throws at build when a mix names a controller the host never supplied", () => {
     expect(() =>
-      rig({ animations: { lo: { channels: { "head.x": { keys: { "0": 0 } } } }, blend: { mix: ["lo"], by: "gone" } } }),
+      rig({
+        clips: { lo: { channels: { "head.x": { keys: { "0": 0 } } } } },
+        mixes: { blend: { mix: ["lo"], by: "gone" } },
+      }),
     ).toThrow(/controller "gone"/);
   });
 
@@ -147,11 +215,11 @@ describe("rig · mix node (combinators as data)", () => {
   it("throws when the controller hands back a scalar instead of a weights map", () => {
     const scalar = rig(
       {
-        animations: {
+        clips: {
           lo: { channels: { "head.x": { keys: { "0": 0 } } } },
           hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-          blend: { mix: ["lo", "hi"], by: "w" },
         },
+        mixes: { blend: { mix: ["lo", "hi"], by: "w" } },
       },
       { controllers: { w: () => 0.5 } },
     ).anims["blend"]!;
@@ -159,191 +227,41 @@ describe("rig · mix node (combinators as data)", () => {
   });
 });
 
-// An axis channel is a mix's twin one currency down: its keys are *positions* on
-// a coordinate and each value names a whole animation, so reading it is the same
-// bracket + eased crossfade as a scalar keyframe track — only it blends poses.
-// Two held one-key clips at 0 and 10 make the slide legible along the coordinate.
-const slide = (x: number | undefined, wrap = "clamp") =>
-  rig(
-    {
-      animations: {
-        lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
-        hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
-        gait: { channels: { g: { over: "x", wrap, keys: { "0": "lo", "1": "hi" } } } },
-      },
-    },
-    { controllers: { x: () => x } },
-  ).anims["gait"]!;
-
-describe("rig · axis channel (a blendspace as keys over a coordinate)", () => {
-  it("folds the two neighbouring animations by the eased coordinate fraction", () => {
-    expect(slide(0)(0)["head.x"]).toBeCloseTo(0);
-    expect(slide(1)(0)["head.x"]).toBeCloseTo(10);
-    expect(slide(0.5)(0)["head.x"]).toBeCloseTo(5);
-    expect(slide(0.25)(0)["head.x"]).toBeCloseTo(2.5);
-  });
-
-  it("clamps hold the extremes past the key-position span", () => {
-    expect(slide(2)(0)["head.x"]).toBeCloseTo(10);
-    expect(slide(-1)(0)["head.x"]).toBeCloseTo(0);
-  });
-
-  it("hold abstains past the edge — the whole axis casts no vote", () => {
-    expect(slide(2, "hold")(0)).toEqual({});
-    expect(slide(-1, "hold")(0)).toEqual({});
-  });
-
-  it("abstains when the coordinate abstains (undefined → no vote)", () => {
-    expect(slide(undefined)(0)).toEqual({});
-  });
-
-  it("carries per-key Bézier handles into the crossfade", () => {
-    // key 0 leaves slowly (out handle pulled flat), so the midpoint reads low —
-    // the same easing law as a timed track, now bending a pose crossfade.
-    const eased = rig(
-      {
-        animations: {
-          lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
-          hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
-          gait: { channels: { g: { over: "x", keys: { "0": { value: "lo", out: [0.9, 0] }, "1": "hi" } } } },
-        },
-      },
-      { controllers: { x: () => 0.5 } },
-    ).anims["gait"]!;
-    expect((eased(0)["head.x"] as number)).toBeLessThan(5);
-  });
-
-  it("is pose-valued: one axis channel drives a whole bag of slots", () => {
-    const two = rig(
-      {
-        animations: {
-          rest: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } }, "head.y": { keys: { "0": 0 } } } },
-          out: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } }, "head.y": { keys: { "0": 20 } } } },
-          reach: { channels: { g: { over: "x", wrap: "clamp", keys: { "0": "rest", "1": "out" } } } },
-        },
-      },
-      { controllers: { x: () => 0.5 } },
-    ).anims["reach"]!;
-    const p = two(0);
-    expect(p["head.x"]).toBeCloseTo(5);
-    expect(p["head.y"]).toBeCloseTo(10);
-  });
-
-  it("throws at build when an axis names a controller the host never supplied", () => {
-    expect(() =>
-      rig({
-        animations: {
-          lo: { channels: { "head.x": { keys: { "0": 0 } } } },
-          gait: { channels: { g: { over: "gone", keys: { "0": "lo" } } } },
-        },
-      }),
-    ).toThrow(/axis channel "g".*controller "gone"/);
-  });
-
-  it("throws at build when an axis key names no node", () => {
-    expect(() =>
-      rig(
-        { animations: { gait: { channels: { g: { over: "x", keys: { "0": "ghost" } } } } } },
-        { controllers: { x: () => 0 } },
-      ),
-    ).toThrow(/"ghost" not found/);
-  });
-
-  it("throws when the coordinate hands back a weights map instead of a scalar", () => {
-    const bad = rig(
-      {
-        animations: {
-          lo: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
-          hi: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
-          gait: { channels: { g: { over: "x", keys: { "0": "lo", "1": "hi" } } } },
-        },
-      },
-      { controllers: { x: () => ({ lo: 1 }) as unknown as number } },
-    ).anims["gait"]!;
-    expect(() => bad(0)).toThrow(/coordinate \(number\), not weights/);
-  });
-
-  it("rejects two channels of one track that drive the same slot (overlap needs `by`)", () => {
-    // Two axes both reaching `head.x` is an unresolved fight — the model demands
-    // an explicit `mix`/`by` to weight it, and load catches the collision.
-    expect(() =>
-      rig(
-        {
-          animations: {
-            a: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0 } } } },
-            b: { wrap: "clamp", channels: { "head.x": { keys: { "0": 10 } } } },
-            clash: {
-              channels: {
-                one: { over: "x", keys: { "0": "a", "1": "b" } },
-                two: { over: "y", keys: { "0": "a", "1": "b" } },
-              },
-            },
-          },
-        },
-        { controllers: { x: () => 0, y: () => 0 } },
-      ),
-    ).toThrow(/both drive "head.x".*explicit `mix`/);
-  });
-});
-
 describe("rig · controller declarations (self-describing inputs)", () => {
-  it("throws when an animation names an undeclared controller", () => {
+  it("throws when a mix names an undeclared controller", () => {
     expect(() =>
       rig(
         {
           controllers: { gazeX: { editor: { as: "coordinate" } } },
-          animations: {
+          clips: {
             lo: { channels: { "head.x": { keys: { "0": 0 } } } },
             hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-            gait: { channels: { g: { over: "gazY", keys: { "0": "lo", "1": "hi" } } } },
           },
+          mixes: { blend: { mix: ["lo", "hi"], by: "w" } }, // `w` not declared
         },
-        { controllers: { gazY: () => 0 } }, // supplied, but not declared
+        { controllers: { w: () => ({ lo: 1, hi: 0 }) } },
       ),
     ).toThrow(/not declared in `controllers`/);
   });
 
-  it("resolves a declared, supplied controller", () => {
-    const gait = rig(
-      {
-        controllers: { gazeX: { kind: "number", editor: { as: "coordinate", range: [-1, 1], default: 0 } } },
-        animations: {
-          lo: { channels: { "head.x": { keys: { "0": 0 } } } },
-          hi: { channels: { "head.x": { keys: { "0": 10 } } } },
-          gait: { channels: { g: { over: "gazeX", wrap: "clamp", keys: { "0": "lo", "1": "hi" } } } },
-        },
-      },
-      { controllers: { gazeX: () => 0.5 } },
-    ).anims["gait"]!;
-    expect(gait(0)["head.x"]).toBeCloseTo(5); // 0.5 along lo(0)->hi(10)
-  });
-
   it("throws on an unknown editor `as`", () => {
-    expect(() =>
-      rig({ controllers: { c: { editor: { as: "wat" } as never } }, animations: {} }),
-    ).toThrow(/unknown editor "as"/);
+    expect(() => rig({ controllers: { c: { editor: { as: "wat" } as never } } })).toThrow(
+      /unknown editor "as"/,
+    );
   });
 
   it("throws on an unknown kind", () => {
     expect(() =>
-      rig({ controllers: { c: { kind: "vector" as never, editor: { as: "clock" } } }, animations: {} }),
+      rig({ controllers: { c: { kind: "vector" as never, editor: { as: "clock" } } } }),
     ).toThrow(/unknown kind/);
   });
 
-  it("resolves controllers by convention when no block is declared", () => {
-    const move = rig(
-      { animations: { move: { controller: "clock", channels: { "head.x": { keys: { "0": 0, "1000": 10 } } } } } },
-      { controllers: { clock: (t) => t } },
-    ).tracks["move"]!;
-    expect(sample(move, 500)["head.x"]).toBeCloseTo(5); // legacy path unchanged
-  });
-
-  it("still requires the host to supply a declared controller", () => {
+  it("throws when the host omits the source for a declared controller", () => {
     expect(() =>
       rig({
-        controllers: { clock: { editor: { as: "clock", gate: "trigger" } } },
-        animations: { move: { controller: "clock", channels: { "head.x": { keys: { "0": 0 } } } } },
+        clips: { a: { channels: { "eye.x": { keys: { "0": 0, "1": 10 } } } } },
+        controllers: { gazeX: { editor: { as: "coordinate" }, clips: [{ clip: "a", offset: 1 }] } },
       }),
-    ).toThrow(/names no controller "clock"/);
+    ).toThrow(/no source supplied/);
   });
 });

@@ -1,13 +1,13 @@
-import { blend, type Pose, type Value } from "./pose";
+import { type Pose, type Value } from "./pose";
 import { linear, type Ease } from "./ease";
 import { type Generator } from "./generator";
 
 /**
- * A channel is one thing: a time turned into a value. It arrives at that value
- * one of two ways — from *stored* keyframes (parallel, time-sorted arrays, with
+ * A channel is one thing: a coordinate turned into a value. It arrives at that
+ * value one of two ways — from *stored* keyframes (parallel, sorted arrays, with
  * an optional easing per key bending the segment leaving it), or from a *pure
- * function* of time (`fn`, a procedural generator). Same seam, so everything
- * above — sampling, wrapping, placing, blending — is oblivious to which it is.
+ * function* (`fn`, a procedural generator). Same seam, so everything above —
+ * sampling, wrapping, placing, blending — is oblivious to which it is.
  *
  * A `fn` channel votes every frame (a wave has no edges); a keyframe channel
  * abstains outside its bracket. When `fn` is present the keyframe arrays are
@@ -18,30 +18,26 @@ export interface Channel {
   readonly values: readonly Value[];
   readonly eases?: readonly Ease[];
   readonly fn?: Generator;
-  /** A third way to a value: not stored keys, not a wave, but an *axis* — a whole
-   *  animation per key, read over a coordinate instead of the clock. Present iff
-   *  this channel is pose-valued; then `times/values` are empty. */
-  readonly axis?: Axis;
 }
 
 /**
- * A coordinate remap in *absolute time*: given a time and the track's own extent
- * (its `duration`), return the time actually read. This is the missing half of a
- * finite key list's definition — what a time past its end means. A generator is
- * born infinite; a keyframe track is finite until a wrap completes it. It sits
- * beside `duration` on the track because the two belong together: the span, and
- * the rule beyond it.
+ * A coordinate remap in a clip's own parameter: given a parameter and the clip's
+ * own extent (its `span`), return the parameter actually read. This is the
+ * missing half of a finite key list's definition — what a parameter past its end
+ * means. A generator is born infinite; a keyframe clip is finite until a wrap
+ * completes it. Wrap is intrinsic to the clip: a loop clip loops no matter who
+ * reads it.
  */
-export type Wrap = (t: number, duration?: number) => number;
+export type Wrap = (t: number, span?: number) => number;
 
-/** Transparent border: leave the time untouched, so a keyframe channel runs off
- *  its keys and abstains (no vote). The default edge — today's behaviour. */
+/** Transparent border: leave the parameter untouched, so a keyframe channel runs
+ *  off its keys and abstains (no vote). The default edge. */
 export const hold: Wrap = (t) => t;
 
 /** `CLAMP_TO_EDGE`: hold the nearest edge frame forever. */
 export const clamp: Wrap = (t, d = 1) => (t < 0 ? 0 : t > d ? d : t);
 
-/** `REPEAT`: tile the track end to end over its own span. */
+/** `REPEAT`: tile the clip end to end over its own span. */
 export const loop: Wrap = (t, d = 1) => ((t % d) + d) % d;
 
 /** `MIRRORED_REPEAT`: tile, flipping every other copy, so it never jumps. */
@@ -51,63 +47,36 @@ export const pingpong: Wrap = (t, d = 1) => {
 };
 
 /**
- * An impure leaf: a user closure bound at rig-build, how the outside world — the
+ * An impure leaf: a host closure bound at rig-build, how the outside world — the
  * mouse, a click, a spring — enters an otherwise pure graph without the runtime
  * ever seeing an event. `undefined` always means "abstain right now", and the
- * channels or inputs it drives cast no vote (blink/rest shows through), exactly
- * as a keyframe does past its edge. What a *present* value means is the socket's
+ * clips or inputs it drives cast no vote (rest shows through), exactly as a
+ * keyframe does past its edge. What a *present* value means is the reader's
  * business — provision is uniform, consumption varies:
- *   • a **coord** socket reads a `number`: the clock to sample a track at.
- *   • a **by** socket reads a `{ input → weight }` map: one fader per mix input.
+ *   • a **coordinate** controller reads a `number`: where along its ruler to sit.
+ *   • a **weights** socket (`mix`/`by`) reads a `{ input → weight }` map.
  * The runtime can't tell any of these from a pure function; only the closure
- * reaches out. One `controllers` map holds them all; each socket narrows.
+ * reaches out. One `controllers` map (host side) holds the bodies; each reader
+ * narrows.
  */
-export type Controller = (
+export type Source = (
   t: number,
 ) => number | Readonly<Record<string, number>> | undefined;
 
 /**
- * An axis: one channel that arrives at its value by reading a *coordinate*
- * instead of the clock. Its keys are positions on that coordinate; each key's
- * value is a whole animation — a *pose-valued* keyframe. Reading it is the exact
- * same bracket-find + eased two-way blend as `at`, only the currency is a pose
- * (`blend`) not a scalar (`lerp`): the coordinate `over(t)` chooses which two
- * neighbours and how much, while each neighbour is sampled at the real clock `t`.
- * So a 1-D blendspace — a gaze, walk↔run, any "everything in between" — is just
- * positioned keys plus an edge rule, one currency up from a timed track. `over`
- * may abstain (`undefined`) and the whole axis casts no vote, exactly like a
- * keyframe past its edge. Because a neighbour is itself an animation, an axis
- * key can name a clip, a mix, or another axis — the recursion closes.
+ * A clip: atomic keyframe data. A bag of channels read over a shared parameter,
+ * plus a `wrap` that says what a parameter beyond the clip's `span` means (loop,
+ * clamp, …), defaulting to `hold` — abstain past the edges. A clip knows nothing
+ * about clocks, coordinates, ranges, or who samples it: it is a pure
+ * `parameter → Pose`. A controller (elsewhere) is what places a clip on a
+ * coordinate and feeds it that parameter; here the clip only folds and reads.
  */
-export interface Axis {
-  /** The read coordinate — a controller returning a scalar (never weights). */
-  readonly over: Controller;
-  /** What a coordinate past the key-position span means (clamp holds the edge,
-   *  hold abstains, loop tiles) — the same edge rule a track spends on time. */
-  readonly wrap: Wrap;
-  /** Key positions on the coordinate, ascending. */
-  readonly stops: readonly number[];
-  /** Per key: the animation it becomes, sampled at the clock when it votes. */
-  readonly children: readonly ((t: number) => Pose)[];
-  /** Per segment: the ease bending the crossfade leaving each key. */
-  readonly eases: readonly Ease[];
-}
-
-/**
- * A named animation: a bag of channels over a shared span, read in absolute
- * time. `duration` is the span's length; `wrap` says what a time beyond it means
- * (loop, clamp, …), defaulting to `hold` — abstain past the edges. `coord`, when
- * present, is a controller that *supplies the clock* for this track's keyframe
- * channels — the click-relative bloom, a scrubbed cursor — replacing the raw
- * time before `wrap` trims its edges; a generator channel ignores it and takes
- * the real clock, being infinite already. Together they make a keyframe track a
- * total `t → value`, exactly like a generator: the extent, and the rule past it.
- */
-export interface Track {
-  readonly duration: number;
+export interface Clip {
   readonly channels: Readonly<Record<string, Channel>>;
   readonly wrap?: Wrap;
-  readonly coord?: Controller;
+  /** The clip's own extent — the last key across its channels — the period a
+   *  loop/clamp/pingpong wrap is measured against. Computed at build. */
+  readonly span: number;
 }
 
 /**
@@ -121,14 +90,14 @@ const lerp = (a: Value, b: Value, f: number): Value =>
     : (a as readonly number[]).map((av, k) => av + ((b as readonly number[])[k]! - av) * f);
 
 /**
- * Sample one channel at an absolute time. A `fn` channel just evaluates its
- * generator (always a vote). A keyframe channel returns `undefined` when the
- * time falls outside its keys — abstaining from the blend (no-vote) rather than
+ * Sample one channel at a parameter. A `fn` channel just evaluates its generator
+ * (always a vote). A keyframe channel returns `undefined` when the parameter
+ * falls outside its keys — abstaining from the blend (no-vote) rather than
  * holding its last value. Contribution requires a bracket, always.
  *
  * Exported because a knob is nothing but a scalar channel: the generator layer
- * samples a keyframe-list knob through this very seam (clamping the time into
- * the bracket first, since a knob must always have a value to give).
+ * samples a keyframe-list knob through this very seam (clamping the parameter
+ * into the bracket first, since a knob must always have a value to give).
  */
 export const at = (ch: Channel, t: number): Value | undefined => {
   if (ch.fn) return ch.fn(t);
@@ -148,71 +117,23 @@ export const at = (ch: Channel, t: number): Value | undefined => {
 };
 
 /**
- * Read an axis at the clock `t`. The coordinate `over(t)` selects the bracket
- * and the crossfade; the two neighbouring animations are each sampled at `t` and
- * blended by the eased fraction — `at`'s law exactly, spoken in pose currency.
- * `undefined` from `over` abstains (no vote); a coordinate that lands off the
- * *wrapped* span abstains too, just as a keyframe running off its keys does. A
- * single key, or an edge under `clamp`, holds one child whole.
+ * Sample a whole clip at a parameter `u` into a (sparse) pose. A generator
+ * channel takes `u` raw — it is already infinite and owns no span. Every
+ * keyframe channel reads `u` trimmed by the clip's `wrap` (so a looping clip
+ * tiles, a clamping one holds its edges); a channel that still lands outside its
+ * keys abstains, leaving that slot to whoever else votes.
  */
-export const readAxis = (ax: Axis, t: number): Pose | undefined => {
-  const x = ax.over(t);
-  if (x === undefined) return undefined; // the coordinate has no value now → abstain
-  if (typeof x !== "number")
-    // an axis reads a coordinate; a weights map named here is a wiring error.
-    throw new Error("articul8: an axis `over` controller must return a coordinate (number), not weights");
-  const { stops, children } = ax;
-  const n = stops.length;
-  const lo = stops[0]!;
-  const hi = stops[n - 1]!;
-  const span = hi - lo;
-  const w = ax.wrap(x - lo, span); // shift the span to 0…span so the wraps apply
-  if (w < 0 || w > span) return undefined; // hold ran off an edge → abstain
-  const u = w + lo;
-  let i = 0;
-  while (i < n - 1 && stops[i + 1]! < u) i++;
-  const a = stops[i]!;
-  const b = stops[i + 1] ?? a;
-  const seg = b - a;
-  if (seg === 0) return children[i]!(t); // single key or exact edge — hold one child
-  const f = (ax.eases[i] ?? linear)((u - a) / seg);
-  return blend([children[i]!(t), children[i + 1]!(t)], [1 - f, f]);
-};
-
-/**
- * Sample a whole track at an absolute time `t` into a (sparse) pose. A generator
- * channel takes the raw clock — it is already infinite and owns no span. Every
- * keyframe channel reads through the track's clock: its `coord` controller if
- * one is bound (which may abstain, returning `undefined`, so the whole track
- * casts no vote this frame), else `t` directly, then trimmed by `wrap` (so a
- * looping track tiles, a clamping one holds its edges). A channel that still
- * lands outside its keys abstains too, leaving that slot to whoever else votes.
- */
-export function sample(track: Track, t: number): Pose {
-  const wrap = track.wrap ?? hold;
+export function sampleClip(clip: Clip, u: number): Pose {
+  const wrap = clip.wrap ?? hold;
   const pose: Pose = {};
-  for (const c in track.channels) {
-    const ch = track.channels[c]!;
-    if (ch.axis) {
-      // An axis is pose-valued: it contributes a *bag* of slots, not one. Load
-      // guaranteed its slots are disjoint from its siblings' (no-vote
-      // disjointness), so merging is a plain write — an overlap would have been
-      // rejected there, told to go through a `mix`'s `by` instead.
-      const p = readAxis(ch.axis, t);
-      if (p) for (const k in p) pose[k] = p[k]!;
-      continue;
-    }
+  for (const c in clip.channels) {
+    const ch = clip.channels[c]!;
     if (ch.fn) {
-      const v = ch.fn(t); // a generator owns the clock: no coord, no wrap
+      const v = ch.fn(u); // a generator owns its parameter: no wrap
       if (v !== undefined) pose[c] = v;
       continue;
     }
-    const u = track.coord ? track.coord(t) : t;
-    if (u === undefined) continue; // the controller has no clock now → abstain
-    if (typeof u !== "number")
-      // a coord socket wants a clock; a weights map named here is a wiring error.
-      throw new Error("articul8: a track's coord controller must return a clock (number), not weights");
-    const v = at(ch, wrap(u, track.duration));
+    const v = at(ch, wrap(u, clip.span));
     if (v !== undefined) pose[c] = v;
   }
   return pose;

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { sine, noise, generators, type Knob } from "../src/generator";
 import { rig } from "../src/rig";
-import { sample } from "../src/track";
+import { sampleClip } from "../src/track";
 
 // A generator is a channel that computes its value instead of storing it. It
 // wears the same four-knob envelope as every other, so a sine and a noise are
@@ -61,26 +61,26 @@ describe("generator · rig channel", () => {
   const data = {
     bones: { nose: { x: 0, y: 5 } },
     skin: { nose: { "0": { "*": 1 } } },
-    animations: {
+    clips: {
       sniff: { channels: { "nose.y": { fn: "noise", bias: 5, amp: 1, freq: 4 } } },
     },
   };
 
-  it("builds a generator-only track with no span of its own (raw clock passes through)", () => {
-    const t = rig(data).tracks.sniff!;
-    expect(t.duration).toBe(0);
-    // A generator owns no span and bypasses wrap — sample hands it the raw clock.
+  it("builds a generator-only clip with no span of its own (raw clock passes through)", () => {
+    const t = rig(data).clips.sniff!;
+    expect(t.span).toBe(0);
+    // A generator owns no span and bypasses wrap — sampleClip hands it the raw clock.
     const n = noise({ bias: c(5), amp: c(1), freq: c(4) });
-    expect(sample(t, 250)["nose.y"]).toBeCloseTo(n(250));
+    expect(sampleClip(t, 250)["nose.y"]).toBeCloseTo(n(250));
   });
 
   it("votes every frame — no bracket, so never abstains", () => {
-    const t = rig(data).tracks.sniff!;
-    for (const u of [-1000, 0, 12345]) expect(sample(t, u)["nose.y"]).not.toBeUndefined();
+    const t = rig(data).clips.sniff!;
+    for (const u of [-1000, 0, 12345]) expect(sampleClip(t, u)["nose.y"]).not.toBeUndefined();
   });
 
   it("rejects an unknown generator name", () => {
-    const bad = { animations: { s: { channels: { "nose.y": { fn: "wobble" } } } } };
+    const bad = { clips: { s: { channels: { "nose.y": { fn: "wobble" } } } } };
     expect(() => rig(bad)).toThrow(/no generator/);
   });
 
@@ -92,8 +92,8 @@ describe("generator · rig channel", () => {
 // Composition: any knob may itself be a wave or a key list, read afresh every
 // frame. There is no combinator node — a richer spec is the whole mechanism.
 describe("generator · composition", () => {
-  const build = (cd: object) => rig({ animations: { s: { channels: { x: cd } } } }).tracks.s!;
-  const val = (cd: object, t: number) => sample(build(cd), t).x as number;
+  const build = (cd: object) => rig({ clips: { s: { channels: { x: cd } } } }).clips.s!;
+  const val = (cd: object, t: number) => sampleClip(build(cd), t).x as number;
 
   it("modulates a knob with a keyframe list (bias tracks the keys, clamped)", () => {
     // amp 0, so the output *is* the bias — and the bias is an eased-linear ramp.
@@ -118,20 +118,20 @@ describe("generator · composition", () => {
     const cd = { fn: "sine", amp: 0.7, freq: 1.2, bias: { fn: "noise", bias: 61, amp: 0.3, freq: 6 } };
     const tr = build(cd);
     for (let t = 0; t < 4000; t += 11) {
-      const y = sample(tr, t).x as number;
+      const y = sampleClip(tr, t).x as number;
       expect(y).toBeGreaterThanOrEqual(60 - 1e-9); // 61 − 0.3 − 0.7
       expect(y).toBeLessThanOrEqual(62 + 1e-9); // 61 + 0.3 + 0.7
     }
     // The nested noise genuinely alters the wave — it is not the bare sine.
     const bare = sine({ bias: c(61), amp: c(0.7), freq: c(1.2) });
-    const drift = [0, 400, 900, 1700].map((t) => (sample(tr, t).x as number) - bare(t));
+    const drift = [0, 400, 900, 1700].map((t) => (sampleClip(tr, t).x as number) - bare(t));
     expect(new Set(drift.map((d) => d.toFixed(5))).size).toBeGreaterThan(1);
   });
 
   it("stays deterministic through composition (scrub/replay identical)", () => {
     const cd = { fn: "sine", freq: 2, amp: { fn: "noise", bias: 1, amp: 0.5, freq: 3 } };
     const tr = build(cd);
-    for (const t of [0, 37, 512.5, 3000]) expect(sample(tr, t).x).toBe(sample(tr, t).x);
+    for (const t of [0, 37, 512.5, 3000]) expect(sampleClip(tr, t).x).toBe(sampleClip(tr, t).x);
   });
 
   it("a bare constant knob still works — composition subsumes the old form", () => {
