@@ -7,7 +7,7 @@
  */
 export { blend, type Pose, type Value } from "./pose";
 export { sampleClip, at, type Clip, type Channel, type Source } from "./track";
-export { sine, noise, generators, type Env, type Knob, type Generator } from "./generator";
+export { sine, noise, saccade, generators, type Env, type Knob, type Generator } from "./generator";
 export {
   linear,
   bezier,

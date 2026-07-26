@@ -141,6 +141,23 @@
           "900": { "value": "#000000", "in": [0.58, 1] }
         } }
       }
+    },
+
+    // wander — idle eyes. Four saccade generators (the engine's hold-then-glide
+    // random) ease the eyes to a fresh fixation, HOLD it, then flick to the next.
+    // Each channel rests on its eye's centre (bias) and reaches the same ±2.5/2.8
+    // the gaze clips do, so a wandering glance covers exactly the field a tracked
+    // one would. Both eyes share a freq per axis, so they move TOGETHER (conjugate
+    // gaze); x and y run at different rates (1.1 vs 0.8 Hz) so the fixations
+    // scatter across the field instead of sliding along a diagonal. Like every
+    // generator it owns no span and reads the raw clock — infinite idle motion.
+    "wander": {
+      "channels": {
+        "eyeR.x": { "fn": "saccade", "bias": 65.359, "amp": 2.5, "freq": 1.1 },
+        "eyeL.x": { "fn": "saccade", "bias": 35.414, "amp": 2.5, "freq": 1.1 },
+        "eyeR.y": { "fn": "saccade", "bias": 57.512, "amp": 2.8, "freq": 0.8 },
+        "eyeL.y": { "fn": "saccade", "bias": 57.512, "amp": 2.8, "freq": 0.8 }
+      }
     }
   },
 
@@ -203,6 +220,36 @@
       "clips": [
         { "clip": "bloom", "offset": 1 }
       ]
+    },
+
+    // lookBlend — a WEIGHTS controller, the `look` mix's `by`. It places no clips
+    // of its own; it hands the mix one weight per input (wander/gazeX/gazeY). The
+    // host eases those weights from all-wander to all-gaze as the pointer enters
+    // and leaves the SVG. kind "weights" is the currency the evaluator checks, and
+    // "as: weights" tells an editor to show a fader bank rather than a ruler.
+    "lookBlend": {
+      "kind": "weights",
+      "editor": { "as": "weights" }
+    }
+  },
+
+  // Mixes: the third node kind — a weighted fan-in of other nodes (clips,
+  // controllers, or mixes), crossfaded by a controller that returns a WEIGHT MAP
+  // (one weight per named input) instead of a coordinate. Where a controller
+  // decides *where* a clip is read, a mix decides *how much* each node counts.
+  "mixes": {
+
+    // look — the eyes' single gaze node, blending idle wander against cursor
+    // tracking. Its three inputs write overlapping slots: `wander` throws all four
+    // eye channels, `gazeX` places the horizontal gaze clips, `gazeY` the vertical.
+    // The `lookBlend` controller (host) returns { wander: 1-k, gazeX: k, gazeY: k },
+    // so at k=0 the eyes wander freely and at k=1 they track the cursor — and per
+    // slot the weights always total 1 (wander + whichever gaze axis owns it), so
+    // the crossfade never divides by zero. The host eases k toward 1 while the
+    // pointer is inside the SVG and back toward 0 when it leaves.
+    "look": {
+      "mix": ["wander", "gazeX", "gazeY"],
+      "by": "lookBlend"
     }
   }
 }

@@ -91,8 +91,40 @@ export const noise =
     return bias(t) + amp(t) * (2 * cosLerp(hash(a), hash(a + 1), k - a) - 1);
   };
 
+/**
+ * Sample-and-hold random with a ballistic flick — the discrete cousin of `noise`,
+ * shaped like a real eye. Each integer cell of the coordinate picks one hashed
+ * target; the value FLICKS to it with a short cosine ease and then HOLDS dead
+ * still for the rest of the cell. Hold, flick to a new value, hold, flick — on and
+ * on. It is the middle path between `noise` (which glides forever and never rests)
+ * and a hard snap (which teleports): distinct fixations joined by quick, smooth
+ * moves. Crucially the flick lasts a fixed ~`GLIDE_MS` no matter the cadence — a
+ * saccade is ballistic, not a slow slide — so raising `freq` packs in more
+ * fixations without turning each move sluggish. `freq` is fixations per second,
+ * `amp` the reach (remapped to `[-1, 1)` about the bias); a differing `freq`/
+ * `phase` decorrelates two channels so a pair of eyes fills the field. Pure in the
+ * clock like every generator — it replays bit-identically on scrub and reload.
+ */
+const GLIDE_MS = 110; // duration of each ballistic flick, independent of cadence
+export const saccade =
+  ({ bias = ZERO, amp = ONE, phase = ZERO, freq = ONE }: Env): Generator =>
+  (t) => {
+    const f = freq(t);
+    const k = coord(t, phase(t), f);
+    const cell = Math.floor(k);
+    const frac = k - cell; // position within the cell, in [0, 1)
+    const target = 2 * hash(cell) - 1;
+    // The flick lasts a fixed ~GLIDE_MS regardless of dwell: express it as a
+    // fraction of this cell (which spans 1000/f ms), capped so a hold always
+    // remains. Within that head slice ease from the previous fixation; then hold.
+    const r = Math.min(0.9, (GLIDE_MS * f) / 1000);
+    const v = r > 0 && frac < r ? cosLerp(2 * hash(cell - 1) - 1, target, frac / r) : target;
+    return bias(t) + amp(t) * v;
+  };
+
 /** The registry a rig indexes by name: `{ "fn": "noise", … }` → `noise(env)`. */
 export const generators: Readonly<Record<string, (env: Env) => Generator>> = {
   sine,
   noise,
+  saccade,
 };

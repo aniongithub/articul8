@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sine, noise, generators, type Knob } from "../src/generator";
+import { sine, noise, saccade, generators, type Knob } from "../src/generator";
 import { rig } from "../src/rig";
 import { sampleClip } from "../src/track";
 
@@ -57,6 +57,31 @@ describe("generator · noise", () => {
   });
 });
 
+describe("generator · saccade", () => {
+  it("is deterministic — the same time always yields the same value", () => {
+    const s = saccade({ amp: c(3), freq: c(2) });
+    for (const t of [0, 17, 123.4, 999, 5000]) expect(s(t)).toBe(s(t));
+  });
+
+  it("stays within bias ± amp", () => {
+    const s = saccade({ bias: c(10), amp: c(2), freq: c(3) });
+    for (let t = 0; t < 4000; t += 7) {
+      expect(s(t)).toBeGreaterThanOrEqual(8 - 1e-9);
+      expect(s(t)).toBeLessThanOrEqual(12 + 1e-9);
+    }
+  });
+
+  it("holds through the dwell, then glides across the boundary (no teleport)", () => {
+    // freq 1 Hz → one fixation per 1000 ms: a glide over the first 30%, then a
+    // hold. The tail of the cell is dead still; the head is a smooth move; and
+    // the two cells meet continuously (no single-frame jump).
+    const s = saccade({ amp: c(1), freq: c(1) });
+    expect(s(500)).toBeCloseTo(s(999)); // dwell (past the ~110 ms flick) → flat
+    expect(s(60)).not.toBeCloseTo(s(500)); // mid-flick, early in the cell → moving
+    expect(s(999)).toBeCloseTo(s(1001), 2); // across the boundary → continuous
+  });
+});
+
 describe("generator · rig channel", () => {
   const data = {
     bones: { nose: { x: 0, y: 5 } },
@@ -85,7 +110,7 @@ describe("generator · rig channel", () => {
   });
 
   it("exposes its generators by name in the registry", () => {
-    expect(Object.keys(generators).sort()).toEqual(["noise", "sine"]);
+    expect(Object.keys(generators).sort()).toEqual(["noise", "saccade", "sine"]);
   });
 });
 
