@@ -33,6 +33,8 @@ export interface ClipRow {
   readonly channel: string;
   readonly kind: RowKind;
   readonly keys: readonly ClipKey[];
+  /** For a procedural (`fn`) row, the generator's name (`sine`/`noise`/`saccade`). */
+  readonly fn?: string;
 }
 
 /** What horizontal units this clip's rows are measured in. */
@@ -92,8 +94,9 @@ export function buildClipModel(data: RigData, clip: string): ClipModel {
       sawKeys = true;
       rows.push({ channel, kind: "keys", keys: keysOf(ch.keys) });
     } else {
-      // Procedural (`fn`) — a wave, no stored keys; drawn as an empty marker row.
-      rows.push({ channel, kind: "fn", keys: [] });
+      // Procedural (`fn`) — a wave, no stored keys; drawn as a filled lane
+      // tagged with the generator's name (`sine`/`noise`/`saccade`).
+      rows.push({ channel, kind: "fn", keys: [], fn: ch.fn });
     }
   }
 

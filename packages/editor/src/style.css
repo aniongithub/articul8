@@ -10,6 +10,9 @@
   --accent: #0078d4;
   --tile-bg: #f2f2f2;
   --border: #e0e0e0;
+  /* Fill for a procedural (fn) timeline lane — a solid, clearly-demarcated blue
+     band that marks a computed channel apart from the plain keyframe tiles. */
+  --tl-fn-fill: #bcdcf5;
 
   /* The stage is an artboard: a fixed, theme-independent surface so the artwork
      reads the same in light or dark. Only the editor chrome toggles. */
@@ -26,6 +29,7 @@
   --accent: #4cc2ff;
   --tile-bg: #1a1a1a;
   --border: #333333;
+  --tl-fn-fill: #124e77;
 }
 
 * {

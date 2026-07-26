@@ -97,7 +97,9 @@ export function mountTimeline(
 
       const tag = document.createElement("span");
       tag.className = "tl-outline-tag";
-      tag.textContent = row.kind === "fn" ? "wave" : "";
+      // A procedural lane is tagged with its generator's real name (`sine`/
+      // `saccade`/`noise`), not a lossy blanket "wave".
+      tag.textContent = row.kind === "fn" ? (row.fn ?? "fn") : "";
 
       el.append(name, tag);
       rowsHost.append(el);
@@ -105,9 +107,37 @@ export function mountTimeline(
   }
 
   function toTimelineModel(model: ClipModel): TimelineModel {
-    const rows: TimelineRow[] = model.rows.map((row) => ({
-      keyframes: row.keys.map((k) => ({ val: k.pos })),
-    }));
+    // A procedural (`fn`) lane has no stored keyframes, so on its own it draws
+    // blank. Paint it with a distinct blue band so it reads as an active,
+    // computed channel — the placeholder the sampled sparkline will later ride.
+    //
+    // The band must be honest about the clip's domain: it hard-starts at the
+    // span's origin and ends at its end, never bleeding into the pre-roll. A
+    // per-row `style.fillColor` can't do that (the control fills the whole
+    // scroll width), so we draw the band as a *group* bounded to
+    // `[span0, spanEnd]`: two boundary keyframes sharing one group make the
+    // control paint a rounded band between them. The boundary keyframes are
+    // themselves invisible (`height: 0` collapses the square to nothing) and
+    // non-interactive — the band is the mark, not the dots.
+    const fnFill = token("--tl-fn-fill");
+    const [span0, span1] = model.span;
+    const rows: TimelineRow[] = model.rows.map((row) => {
+      if (row.kind === "fn") {
+        return {
+          keyframesDraggable: false,
+          groupsDraggable: false,
+          style: {
+            groupsStyle: { fillColor: fnFill, radii: 0 },
+            keyframesStyle: { height: 0, width: 0 },
+          },
+          keyframes: [
+            { val: span0, group: "fn", draggable: false },
+            { val: span1, group: "fn", draggable: false },
+          ],
+        };
+      }
+      return { keyframes: row.keys.map((k) => ({ val: k.pos })) };
+    });
     // Keep at least one (empty) row so the control still draws its gauge.
     if (rows.length === 0) rows.push({ keyframes: [] });
     return { rows };
@@ -177,6 +207,14 @@ export function mountTimeline(
     },
     refreshTheme() {
       timeline.setOptions(themeOptions());
+      // The fn-lane fill is carried on the model (per-row style), so re-project
+      // the current clip to pick up the new theme's `--tl-fn-fill`, preserving
+      // the playhead position.
+      if (current) {
+        const t = timeline.getTime();
+        timeline.setModel(toTimelineModel(current));
+        timeline.setTime(t);
+      }
     },
     dispose() {
       ro.disconnect();
