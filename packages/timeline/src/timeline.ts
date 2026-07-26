@@ -1847,6 +1847,133 @@ export class Timeline extends TimelineEventsEmitter {
     });
   };
   /**
+   * Render the procedural curves (function channels) for every row that carries
+   * one. Each curve is sampled across the visible window using the control's own
+   * value↔pixel transform, so zoom, scroll and resize need no bookkeeping here —
+   * the trace simply re-projects on the next redraw. Sampling is screen-space
+   * per-column min/max (a few sub-samples per pixel reduced to their extremes),
+   * so a fast signal zoomed out shows its envelope instead of aliasing, and a
+   * slow one zoomed in collapses onto a clean line.
+   */
+  _renderCurves = (): void => {
+    if (!this._ctx) {
+      return;
+    }
+    const viewModel = this._generateViewModel();
+    if (!viewModel?.rowsViewModels) {
+      return;
+    }
+    const clientWidth = this._canvasClientWidth();
+    const leftMargin = this._leftMargin();
+    const ctx = this._ctx;
+    ctx.save();
+    try {
+      viewModel.rowsViewModels.forEach((rowViewModel) => {
+        const curve = rowViewModel?.model?.curve;
+        if (!curve || typeof curve.sample !== 'function') {
+          return;
+        }
+        const rowSize = rowViewModel.size;
+        if (!rowSize || rowSize.height <= 0) {
+          return;
+        }
+
+        // Horizontal domain in local px, clipped to the visible canvas. When the
+        // curve declares no bounds it spans the whole visible window.
+        const dStart = TimelineUtils.isNumber(curve.domainStart) ? (curve.domainStart as number) : this._fromScreen(leftMargin);
+        const dEnd = TimelineUtils.isNumber(curve.domainEnd) ? (curve.domainEnd as number) : this._fromScreen(clientWidth);
+        let x0 = Math.round(this._toScreenPx(dStart));
+        let x1 = Math.round(this._toScreenPx(dEnd));
+        if (x1 < x0) {
+          const swap = x0;
+          x0 = x1;
+          x1 = swap;
+        }
+        x0 = Math.max(x0, leftMargin);
+        x1 = Math.min(x1, clientWidth);
+        const width = x1 - x0;
+        if (width <= 1) {
+          return;
+        }
+
+        // Vertical lane bounds, inset a touch so the trace breathes in the band.
+        const inset = Math.min(6, rowSize.height / 4);
+        const topY = rowSize.y + inset;
+        const botY = rowSize.y + rowSize.height - inset;
+        const laneH = botY - topY;
+        if (laneH <= 0) {
+          return;
+        }
+
+        const min = curve.min;
+        const max = curve.max;
+        const range = max - min || 1;
+        const valToY = (v: number): number => {
+          let nv = (v - min) / range;
+          nv = nv < 0 ? 0 : nv > 1 ? 1 : nv;
+          return botY - nv * laneH; // min sits at the bottom of the lane
+        };
+
+        const cols = Math.ceil(width);
+        const subPerCol = 3;
+        const tops = new Array<number>(cols);
+        const bots = new Array<number>(cols);
+        for (let c = 0; c < cols; c++) {
+          const px = x0 + c;
+          let lo = Infinity;
+          let hi = -Infinity;
+          for (let s = 0; s <= subPerCol; s++) {
+            const sx = px + s / subPerCol;
+            let t = this._fromScreen(sx);
+            if (t < dStart) t = dStart;
+            if (t > dEnd) t = dEnd;
+            const v = curve.sample(t);
+            if (!TimelineUtils.isNumber(v)) {
+              continue;
+            }
+            const vv = v as number;
+            if (vv < lo) lo = vv;
+            if (vv > hi) hi = vv;
+          }
+          if (lo === Infinity) {
+            lo = min;
+            hi = min;
+          }
+          tops[c] = valToY(hi);
+          bots[c] = valToY(lo);
+        }
+
+        const color = curve.color || this._options?.labelsColor || '#4cc2ff';
+        const fillAlpha = curve.fillAlpha === undefined ? 0.22 : curve.fillAlpha;
+
+        // Fill the min/max envelope faintly, then stroke its upper edge crisply.
+        if (fillAlpha > 0) {
+          ctx.save();
+          ctx.globalAlpha = fillAlpha;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(x0, tops[0]!);
+          for (let c = 1; c < cols; c++) ctx.lineTo(x0 + c, tops[c]!);
+          for (let c = cols - 1; c >= 0; c--) ctx.lineTo(x0 + c, bots[c]!);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+
+        ctx.lineWidth = curve.thickness || 1.5;
+        ctx.strokeStyle = color;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x0, tops[0]!);
+        for (let c = 1; c < cols; c++) ctx.lineTo(x0 + c, tops[c]!);
+        ctx.stroke();
+      });
+    } finally {
+      ctx.restore();
+    }
+  };
+  /**
    * Method is used for the canvas drawing optimization.
    * Bounds are cut to draw only visible parts for the active canvas.
    */
@@ -2244,6 +2371,8 @@ export class Timeline extends TimelineEventsEmitter {
 
     this._renderBackground();
     this._renderRows();
+    // Procedural curves ride on top of the row bands, beneath the header mask.
+    this._renderCurves();
     // Render after rows
     this._renderHeaderBackground();
     this._renderTicks();

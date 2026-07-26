@@ -25,6 +25,7 @@ const stage = mountStage(
 const timeline = mountTimeline(
   document.getElementById("tl-canvas")!,
   document.getElementById("tl-outline-rows")!,
+  stage.sampleChannel,
 );
 
 const clipSelect = document.getElementById("clip-select") as HTMLSelectElement;
@@ -84,9 +85,15 @@ function setPlaying(next: boolean): void {
 }
 
 // Scrubbing on the timeline is a manual clock: pause auto-play and follow it.
+// Clamp to the clip's span so the scrub can't leave the region playback loops
+// over — for a procedural clip the generator is defined past the span, but 2.0
+// is the loop boundary, so inspecting beyond it would show what playback never
+// does. The control's playhead snaps back to the bound via `renderAt`.
 timeline.onScrub((t) => {
   if (playing) setPlaying(false);
-  renderAt(t);
+  if (!model) return;
+  const [lo, hi] = model.span;
+  renderAt(t < lo ? lo : t > hi ? hi : t);
 });
 
 playBtn.addEventListener("click", () => setPlaying(!playing));

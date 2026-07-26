@@ -17,6 +17,13 @@ export interface Stage {
   showClip(clip: string, t: number): void;
   /** Rest value for a controller (coordinate `default`, else abstain). */
   rest(name: string): number | undefined;
+  /**
+   * Sample one procedural (`fn`) channel of a clip at a local parameter — the
+   * exact pure generator the runtime evaluates, so the timeline's sparkline is
+   * the same signal the puppet moves by. Returns `undefined` for a non-`fn` or
+   * unknown channel (nothing to trace).
+   */
+  sampleChannel(clip: string, channel: string, t: number): number | undefined;
 }
 
 /** Build the puppet stage over a mount node, standing in for the live host. */
@@ -49,6 +56,12 @@ export function mountStage(host: HTMLElement, data: RigData, svgText: string): S
       const a = anims[clip];
       if (!a) return;
       view.render(a(t));
+    },
+    sampleChannel(clip, channel, t) {
+      const fn = r.clips[clip]?.channels[channel]?.fn;
+      if (!fn) return undefined;
+      const v = fn(t);
+      return typeof v === "number" && Number.isFinite(v) ? v : undefined;
     },
   };
 }

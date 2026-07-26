@@ -17,6 +17,11 @@ import type {
 } from "@articul8/timeline";
 import type { ClipModel } from "./model";
 
+/** Samples one procedural channel of a clip at a local parameter (the runtime's
+ *  pure generator). Supplied by the stage so the sparkline traces the real
+ *  signal the puppet moves by. */
+export type ChannelSampler = (clip: string, channel: string, t: number) => number | undefined;
+
 const ROW_H = 30;
 const ROW_GAP = 2;
 const HEADER_H = 28;
@@ -65,13 +70,28 @@ export interface TimelinePanel {
 export function mountTimeline(
   canvasHost: HTMLElement,
   rowsHost: HTMLElement,
+  sample: ChannelSampler,
 ): TimelinePanel {
   const timeline = new Timeline({ id: canvasHost, ...themeOptions() });
 
   let scrub: (t: number) => void = () => {};
   let current: ClipModel | null = null;
   timeline.onTimeChanged((e: TimelineTimeChangedEvent) => {
-    if (e.source === "user") scrub(e.val);
+    if (e.source !== "user") return;
+    // Clamp the user's scrub to the clip's span. A procedural channel is defined
+    // past the span, but the span is the region playback loops over, so we don't
+    // let the playhead leave it. Pin the control's own playhead to the bound when
+    // the drag overshoots so it visibly stops at the edge instead of floating on.
+    let t = e.val;
+    if (current) {
+      const [lo, hi] = current.span;
+      const c = t < lo ? lo : t > hi ? hi : t;
+      if (c !== t) {
+        t = c;
+        timeline.setTime(t);
+      }
+    }
+    scrub(t);
   });
 
   function renderRows(model: ClipModel): void {
@@ -106,23 +126,51 @@ export function mountTimeline(
     }
   }
 
+  // Auto-range a curve's amplitude by sampling its whole span once. A generator
+  // rests on `bias±amp`, but either knob may itself be modulated, so we take the
+  // signal's own extremes rather than trusting declared knobs — and range over
+  // the FULL span (not the visible sub-window) so the trace doesn't breathe as
+  // the user zooms or scrolls. A flat/absent signal falls back to a unit band.
+  function curveDomain(clip: string, channel: string, span: readonly [number, number]): [number, number] {
+    const [a, b] = span;
+    const N = 512;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i <= N; i++) {
+      const v = sample(clip, channel, a + ((b - a) * i) / N);
+      if (typeof v !== "number" || !Number.isFinite(v)) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (lo === Infinity || lo === hi) {
+      const c = lo === Infinity ? 0 : lo;
+      return [c - 1, c + 1];
+    }
+    const pad = (hi - lo) * 0.08; // a little headroom so peaks don't kiss the edge
+    return [lo - pad, hi + pad];
+  }
+
   function toTimelineModel(model: ClipModel): TimelineModel {
-    // A procedural (`fn`) lane has no stored keyframes, so on its own it draws
-    // blank. Paint it with a distinct blue band so it reads as an active,
-    // computed channel — the placeholder the sampled sparkline will later ride.
+    // A procedural (`fn`) lane has no stored keyframes. It is drawn as two layers:
+    //   1. a blue *band* bounded to the clip's domain, so the lane reads as an
+    //      active computed channel that hard-starts at the span's origin (never
+    //      bleeding into the pre-roll); and
+    //   2. a *sparkline* — the generator sampled and traced across that band, the
+    //      same pure signal the runtime moves the puppet by.
     //
-    // The band must be honest about the clip's domain: it hard-starts at the
-    // span's origin and ends at its end, never bleeding into the pre-roll. A
-    // per-row `style.fillColor` can't do that (the control fills the whole
-    // scroll width), so we draw the band as a *group* bounded to
-    // `[span0, spanEnd]`: two boundary keyframes sharing one group make the
-    // control paint a rounded band between them. The boundary keyframes are
-    // themselves invisible (`height: 0` collapses the square to nothing) and
-    // non-interactive — the band is the mark, not the dots.
+    // The band can't be a per-row `style.fillColor` (the control fills the whole
+    // scroll width), so it is a *group* bounded to `[span0, span1]`: two boundary
+    // keyframes sharing one group make the control paint a rounded band between
+    // them. The boundary keyframes are invisible (`height: 0` collapses the
+    // square) and non-interactive — the band is the mark, not the dots. The
+    // sparkline rides on the control's own `curve` capability, which samples it
+    // across the visible window using the control's transform (zoom/scroll free).
     const fnFill = token("--tl-fn-fill");
+    const fnLine = token("--accent");
     const [span0, span1] = model.span;
     const rows: TimelineRow[] = model.rows.map((row) => {
       if (row.kind === "fn") {
+        const [min, max] = curveDomain(model.clip, row.channel, model.span);
         return {
           keyframesDraggable: false,
           groupsDraggable: false,
@@ -134,6 +182,15 @@ export function mountTimeline(
             { val: span0, group: "fn", draggable: false },
             { val: span1, group: "fn", draggable: false },
           ],
+          curve: {
+            sample: (t: number) => sample(model.clip, row.channel, t),
+            min,
+            max,
+            domainStart: span0,
+            domainEnd: span1,
+            color: fnLine,
+            fillAlpha: 0.22,
+          },
         };
       }
       return { keyframes: row.keys.map((k) => ({ val: k.pos })) };

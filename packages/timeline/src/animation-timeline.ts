@@ -7,6 +7,7 @@ export * from './settings/timelineConsts';
 export * from './models/timelineRanged';
 export * from './models/timelineModel';
 export * from './models/timelineRow';
+export * from './models/timelineRowCurve';
 export * from './models/timelineKeyframe';
 
 // @public styles
