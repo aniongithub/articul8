@@ -4,10 +4,14 @@
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
-  "forwardPorts": [5173],
-  "appPort": ["5173:5173"],
+  "forwardPorts": [5173, 5174],
+  "appPort": ["5173:5173", "5174:5174"],
   "portsAttributes": {
     "5173": {
+      "label": "cat example (vite)",
+      "onAutoForward": "notify"
+    },
+    "5174": {
       "label": "editor (vite)",
       "onAutoForward": "notify"
     }

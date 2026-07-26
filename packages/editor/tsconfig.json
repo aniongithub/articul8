@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@articul8/runtime": ["../../packages/runtime/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

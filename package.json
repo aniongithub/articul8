@@ -12,6 +12,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspace @articul8/example-cat",
+    "dev:editor": "npm run dev --workspace @articul8/editor",
     "test": "vitest run",
     "typecheck": "tsc -b"
   },
