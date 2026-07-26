@@ -20,6 +20,8 @@ import type { ClipModel } from "./model";
 const ROW_H = 30;
 const ROW_GAP = 2;
 const HEADER_H = 28;
+const FIT_MARGIN = 48; // px reserved for the gauge's left margin + right breathing room
+const STEP_PX = 120; // px between gauge major ticks (drives tick density, not the fit)
 
 function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -30,8 +32,8 @@ function themeOptions(): TimelineOptions {
   return {
     fillColor: token("--bg"),
     headerFillColor: token("--bg"),
-    labelsColor: token("--fg-dim"),
-    tickColor: token("--border"),
+    labelsColor: token("--fg-muted"),
+    tickColor: token("--fg-dim"),
     selectionColor: accent,
     headerHeight: HEADER_H,
     snapEnabled: false,
@@ -67,6 +69,7 @@ export function mountTimeline(
   const timeline = new Timeline({ id: canvasHost, ...themeOptions() });
 
   let scrub: (t: number) => void = () => {};
+  let current: ClipModel | null = null;
   timeline.onTimeChanged((e: TimelineTimeChangedEvent) => {
     if (e.source === "user") scrub(e.val);
   });
@@ -110,11 +113,61 @@ export function mountTimeline(
     return { rows };
   }
 
+  // Fit the clip's full span to the canvas width. The control maps a value to a
+  // pixel by `px = val * stepPx / stepVal` (zoom 1), so its fixed default scale
+  // (0.12 px/unit) crushes a canonical [0,1] clip's two keys into one dot while
+  // spreading a ms clip fine. We keep stepPx at its modest default (so the gauge
+  // still lays out ~one major tick per stepPx, with legible subdivisions) and fit
+  // via stepVal = STEP_PX * len / usable — giving px/unit = usable/len, so *any*
+  // clip fills the same width with its keyframes and ticks both legible.
+  function fitOptions(model: ClipModel): TimelineOptions {
+    const len = Math.max(1e-6, model.span[1] - model.span[0]);
+    const width = canvasHost.clientWidth || 600;
+    const usable = Math.max(240, width - FIT_MARGIN);
+    return { stepPx: STEP_PX, stepVal: (STEP_PX * len) / usable };
+  }
+
+  // Push scale + colours together. Colours are re-read from the live CSS tokens
+  // every time, so the gauge tick/label colours are asserted on every redraw —
+  // not just at construction (when the tokens may not have resolved yet, which is
+  // why ticks previously stayed invisible until a manual theme toggle).
+  function applyOptions(model: ClipModel): void {
+    timeline.setOptions({ ...themeOptions(), ...fitOptions(model) });
+  }
+
+  // Re-fit whenever the canvas host changes size. A ResizeObserver fires once
+  // when observation begins and again when layout settles the real width — that
+  // second call is what makes the gauge ticks appear on first paint (before it,
+  // the canvas has a degenerate width and the control skips tick rendering).
+  // It also handles window/splitter resizes, keeping the clip's span filling the
+  // width. We refit only after a real width lands to avoid thrashing on 0-size.
+  let lastWidth = 0;
+  const refit = (): void => {
+    const w = canvasHost.clientWidth;
+    if (w <= 0 || !current) return;
+    if (w === lastWidth) return;
+    lastWidth = w;
+    applyOptions(current);
+  };
+  const ro = new ResizeObserver(refit);
+  ro.observe(canvasHost);
+
   return {
     setClip(model) {
+      current = model;
       renderRows(model);
+      applyOptions(model);
       timeline.setModel(toTimelineModel(model));
       timeline.setTime(model.span[0]);
+      // Belt-and-suspenders: re-assert scale + colours after layout and the
+      // control's own internal rescale have settled (both run on rAF). This is
+      // exactly what a manual theme toggle does — doing it automatically means
+      // the gauge ticks paint on first load without one.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (current === model) applyOptions(model);
+        }),
+      );
     },
     setTime(t) {
       timeline.setTime(t);
@@ -126,6 +179,7 @@ export function mountTimeline(
       timeline.setOptions(themeOptions());
     },
     dispose() {
+      ro.disconnect();
       timeline.dispose();
     },
   };
