@@ -7,6 +7,9 @@ export default defineConfig({
       "@articul8/runtime": fileURLToPath(
         new URL("../../packages/runtime/src/index.ts", import.meta.url),
       ),
+      "@articul8/timeline": fileURLToPath(
+        new URL("../../packages/timeline/src/animation-timeline.ts", import.meta.url),
+      ),
     },
   },
   server: { host: true, port: 5174 },

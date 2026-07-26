@@ -1,0 +1,21 @@
+{
+  "name": "@articul8/timeline",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vendored canvas timeline control (fork of animation-timeline-js)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/animation-timeline.js",
+  "types": "./dist/animation-timeline.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/animation-timeline.d.ts",
+      "default": "./dist/animation-timeline.js"
+    }
+  },
+  "files": ["dist", "src", "LICENSE"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  }
+}

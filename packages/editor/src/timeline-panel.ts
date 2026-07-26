@@ -1,5 +1,5 @@
 /**
- * The timeline panel — a thin wrapper over `animation-timeline-js`. It renders a
+ * The timeline panel — a thin wrapper over `@articul8/timeline`. It renders a
  * clip's channels as a dope-sheet and reports playhead moves. It holds NO model
  * of its own: `setClip` projects a `ClipModel` into the control's rows, so the
  * timeline stays a pure view over the rig.
@@ -8,13 +8,13 @@
  * Metro tokens from the document and push them in (and again on theme change).
  * The channel names live in a sibling HTML outline so they get real Metro type.
  */
-import { Timeline, TimelineKeyframeShape } from "animation-timeline-js";
+import { Timeline, TimelineKeyframeShape } from "@articul8/timeline";
 import type {
   TimelineModel,
   TimelineOptions,
   TimelineRow,
   TimelineTimeChangedEvent,
-} from "animation-timeline-js";
+} from "@articul8/timeline";
 import type { ClipModel } from "./model";
 
 const ROW_H = 30;

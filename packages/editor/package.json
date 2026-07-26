@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "@articul8/runtime": "*",
-    "animation-timeline-js": "^2.3.5"
+    "@articul8/timeline": "*"
   }
 }
