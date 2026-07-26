@@ -56,9 +56,9 @@ describe("rig · skin (end to end)", () => {
 });
 
 // A controller places clips on a coordinate. The gaze layout: two canonical
-// clips, each rest(0)→extreme(1), placed at offset ∓1 so the cursor value `v`
-// samples each at `u = v / offset`. The two half-axes resolve to one value by
-// the abstain (hold past the edge) + carrier-normalized blend laws.
+// clips, each rest(0)→extreme(1), placed at scale ∓1 so the cursor value `v`
+// samples each at `u = (v - offset) / scale`. The two half-axes resolve to one
+// value by the abstain (hold past the edge) + carrier-normalized blend laws.
 const gaze = (v: number | undefined) =>
   rig(
     {
@@ -71,8 +71,8 @@ const gaze = (v: number | undefined) =>
           kind: "number",
           editor: { as: "coordinate", range: [-1, 1], default: 0 },
           clips: [
-            { clip: "gazeLeft", offset: -1 },
-            { clip: "gazeRight", offset: 1 },
+            { clip: "gazeLeft", offset: 0, scale: -1 },
+            { clip: "gazeRight", offset: 0, scale: 1 },
           ],
         },
       },
@@ -99,15 +99,15 @@ describe("rig · controller (places clips on a coordinate)", () => {
     expect(gaze(undefined)).toEqual({});
   });
 
-  it("clocks a clip through its offset — u = t / offset", () => {
+  it("clocks a clip through the placement affine — u = (t - offset) / scale", () => {
     // A clock controller places one clip and scrubs it by the raw clock: at
-    // offset 900 the clip's full extreme lands at t = 900 ms.
+    // scale 900 the clip's full extreme (u=1) lands at t = 900 ms.
     const heart = (t: number) =>
       rig(
         {
-          // A canonical [0,1] pulse; offset 900 lands its full extreme at t=900 ms.
+          // A canonical [0,1] pulse; scale 900 lands its full extreme at t=900 ms.
           clips: { pulse: { wrap: "clamp", channels: { "head.x": { keys: { "0": 0, "1": 10 } } } } },
-          controllers: { heartClock: { editor: { as: "clock" }, clips: [{ clip: "pulse", offset: 900 }] } },
+          controllers: { heartClock: { editor: { as: "clock" }, clips: [{ clip: "pulse", offset: 0, scale: 900 }] } },
         },
         { controllers: { heartClock: (t) => t } },
       ).anims["heartClock"]!(t);

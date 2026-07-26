@@ -16,6 +16,7 @@ import type {
   TimelineTimeChangedEvent,
 } from "@articul8/timeline";
 import type { ClipModel } from "./model";
+import { UNIT_FORMATTERS, UNIT_QUANTUM } from "./model";
 
 /** Samples one procedural channel of a clip at a local parameter (the runtime's
  *  pure generator). Supplied by the stage so the sparkline traces the real
@@ -211,7 +212,16 @@ export function mountTimeline(
     const len = Math.max(1e-6, model.span[1] - model.span[0]);
     const width = canvasHost.clientWidth || 600;
     const usable = Math.max(240, width - FIT_MARGIN);
-    return { stepPx: STEP_PX, stepVal: (STEP_PX * len) / usable };
+    // Label the gauge in the clip's own unit (coord `0.00–1.00`, ms `0–2000 ms`),
+    // the same map the editor's time readout uses — so ruler and readout agree.
+    // Quantize the playhead to the unit's grid too, so a continuous coord axis
+    // scrubs smoothly instead of snapping to whole units.
+    return {
+      stepPx: STEP_PX,
+      stepVal: (STEP_PX * len) / usable,
+      formatUnits: UNIT_FORMATTERS[model.unit],
+      timeRounding: UNIT_QUANTUM[model.unit],
+    };
   }
 
   // Push scale + colours together. Colours are re-read from the live CSS tokens

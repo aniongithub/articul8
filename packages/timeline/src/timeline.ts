@@ -1491,6 +1491,11 @@ export class Timeline extends TimelineEventsEmitter {
    * @param isSeconds whether seconds are passed.
    */
   _formatUnitsText = (ms: number): string => {
+    // Defer to a host-supplied formatter when present: the host knows the axis's
+    // real unit (a coordinate, degrees, a clock…); the control only knows numbers.
+    if (this._options.formatUnits) {
+      return this._options.formatUnits(ms);
+    }
     const sign = TimelineUtils.sign(ms) < 0 ? '-' : '';
     ms = Math.abs(ms);
     // 1- Convert to seconds:
@@ -2409,7 +2414,15 @@ export class Timeline extends TimelineEventsEmitter {
     if (!this._options) {
       return false;
     }
-    val = Math.round(val);
+    // Quantize the playhead to the axis's grid. Defaults to whole units (the
+    // historical millisecond assumption); a host with a non-integer axis passes
+    // its own step, or `0`/negative to keep the value continuous.
+    const step = this._options.timeRounding;
+    if (step === undefined) {
+      val = Math.round(val);
+    } else if (step > 0) {
+      val = Math.round(val / step) * step;
+    }
     val = TimelineUtils.keepInBounds(val, this._options.min);
     if (this._val != val) {
       const prevVal = this._val;

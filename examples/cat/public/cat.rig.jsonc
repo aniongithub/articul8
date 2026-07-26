@@ -3,14 +3,15 @@
 // A rig is three parts and a library of clips, split along one clean seam:
 //   • bones        the abstract handles the animation moves (never drawn)
 //   • skin         which drawn shape each bone deforms, and by how much
-//   • clips        ATOMIC keyframe data — a canonical [0,1] motion (0 = rest,
-//                  1 = full extreme) that knows nothing about clocks, cursors,
-//                  or who samples it. A bone attribute over time, a procedural
-//                  wave, a morph between shapes, or a paint tween.
+//   • clips        ATOMIC keyframe data — a TIME-DOMAIN motion in milliseconds
+//                  (0 = rest through to the clip's authored duration) that knows
+//                  nothing about clocks, cursors, or who samples it. A bone
+//                  attribute over time, a procedural wave, a morph between shapes,
+//                  or a paint tween.
 //   • controllers  the live inputs, each PLACING clips on a coordinate: it reads
-//                  its source value v and samples a placed clip at u = v / offset.
-//                  A controller is a pure lookup — it decides *where* a clip is
-//                  read, never *what* the clip contains.
+//                  its source value v and samples a placed clip at
+//                  u = (v - offset) / scale. A controller is a pure lookup — it
+//                  decides *where* a clip is read, never *what* the clip contains.
 //
 // Nothing here is code. The runtime reads this file, and the host (main.ts)
 // only supplies the live inputs — the cursor, a click — as named controllers.
@@ -42,11 +43,12 @@
     "nose": { "nose": { "*": 1 } }
   },
 
-  // Clips: the atomic library. Each is a canonical [0,1] motion — a set of
-  // channels, one writing each slot (a bone attribute like eyeR.x, a whole-shape
-  // geometry like eyeR, or a paint like eyeR.fill) over a parameter. A clip's
-  // channels must write disjoint slots; a clip's "wrap" says what a parameter
-  // past its span means (default "hold" = abstain, casting no vote off its edge).
+  // Clips: the atomic library. Each is a time-domain motion in milliseconds — a
+  // set of channels, one writing each slot (a bone attribute like eyeR.x, a
+  // whole-shape geometry like eyeR, or a paint like eyeR.fill) over a parameter.
+  // A clip's channels must write disjoint slots; a clip's "wrap" says what a
+  // parameter past its span means (default "hold" = abstain, casting no vote off
+  // its edge).
   "clips": {
 
     // sniff — a procedural channel, no keyframes. The nose's y rides a sine
@@ -78,27 +80,28 @@
       }
     },
 
-    // The four gaze clips. Each is a canonical [0,1] motion from rest (u=0, the
-    // eye's resting centre) to one full deflection (u=1). Default "hold" wrap
-    // means a parameter outside [0,1] abstains — casts no vote — which is exactly
-    // what lets two half-axis clips share one slot (see gazeX/gazeY below).
-    // gazeLeft/Right move x only; gazeUp/Down move y only — deliberately disjoint
-    // so the horizontal and vertical controllers never fight over a slot.
+    // The four gaze clips. Each is a time-domain motion in milliseconds, from
+    // rest (u=0, the eye's resting centre) to one full deflection (u=1000).
+    // Default "hold" wrap means a parameter outside [0,1000] abstains — casts no
+    // vote — which is exactly what lets two half-axis clips share one slot (see
+    // gazeX/gazeY below). gazeLeft/Right move x only; gazeUp/Down move y only —
+    // deliberately disjoint so the horizontal and vertical controllers never
+    // fight over a slot.
     "gazeLeft":  { "channels": {
-      "eyeR.x": { "keys": { "0": 65.359, "1": 62.859 } },
-      "eyeL.x": { "keys": { "0": 35.414, "1": 32.914 } }
+      "eyeR.x": { "keys": { "0": 65.359, "1000": 62.859 } },
+      "eyeL.x": { "keys": { "0": 35.414, "1000": 32.914 } }
     } },
     "gazeRight": { "channels": {
-      "eyeR.x": { "keys": { "0": 65.359, "1": 67.859 } },
-      "eyeL.x": { "keys": { "0": 35.414, "1": 37.914 } }
+      "eyeR.x": { "keys": { "0": 65.359, "1000": 67.859 } },
+      "eyeL.x": { "keys": { "0": 35.414, "1000": 37.914 } }
     } },
     "gazeUp":    { "channels": {
-      "eyeR.y": { "keys": { "0": 57.512, "1": 54.712 } },
-      "eyeL.y": { "keys": { "0": 57.512, "1": 54.712 } }
+      "eyeR.y": { "keys": { "0": 57.512, "1000": 54.712 } },
+      "eyeL.y": { "keys": { "0": 57.512, "1000": 54.712 } }
     } },
     "gazeDown":  { "channels": {
-      "eyeR.y": { "keys": { "0": 57.512, "1": 60.312 } },
-      "eyeL.y": { "keys": { "0": 57.512, "1": 60.312 } }
+      "eyeR.y": { "keys": { "0": 57.512, "1000": 60.312 } },
+      "eyeL.y": { "keys": { "0": 57.512, "1000": 60.312 } }
     } },
 
     // bloom — eyes morph into hearts, then settle back. A time-domain clip in
@@ -165,9 +168,9 @@
   // coordinate. Declaring them makes the rig self-describing — this file alone
   // says exactly what the host must feed it, so an editor can stand in stub
   // sliders. A controller reads its source value v (supplied by the host) and, for
-  // each placement, samples the clip at u = v / offset — so "offset" is the source
-  // value where the clip's u=1 (full extreme) lands, and its sign mirrors the clip
-  // onto the other side of centre.
+  // each placement, samples the clip at u = (v - offset) / scale — "offset"
+  // anchors the clip (the input where u=0) and "scale" is how many input units
+  // span one clip ms, its sign mirroring the clip onto the other side.
   //   kind   — the runtime *currency*. "number" for a coordinate/clock. Written
   //            for completeness; the evaluator does not yet branch on it.
   //   editor — how the value is *authored* (the WinForms [Editor] model). Read by
@@ -176,49 +179,51 @@
   //     as "clock"      — a time source scrubbed through a clip. gate "trigger"
   //                        means it abstains until fired (the click), so no default.
   //   clips  — the placements this controller folds. Each names a clip and the
-  //            offset that positions and scales it.
+  //            offset + scale that position it.
   // The host still supplies the actual t -> value closures (main.ts); this is the
   // signature, those are the bodies.
   "controllers": {
 
-    // gazeX — the horizontal cursor coordinate in [-1, 1]. It places gazeLeft at
-    // offset -1 and gazeRight at +1: at v=-1, gazeLeft reads u=(-1)/(-1)=1 (full
-    // left) while gazeRight reads u=-1 and abstains (hold past its edge); at v=0
-    // both read u=0 (rest) and agree; at v=+0.5 only gazeRight votes (u=0.5). Two
-    // half-axis clips resolve to one value by the abstain + blend laws.
+    // gazeX — the horizontal cursor coordinate in [-1, 1]. It places gazeLeft
+    // scaled by -0.001 and gazeRight by +0.001 (each gaze clip runs 0…1000 ms, so
+    // one coordinate unit spans the whole 1000 ms clip): at v=-1, gazeLeft reads
+    // u=(-1)/(-0.001)=1000 (full left) while gazeRight reads u=-1000 and abstains
+    // (hold past its edge); at v=0 both read u=0 (rest) and agree; at v=+0.5 only
+    // gazeRight votes (u=500). Two half-axis clips resolve to one value by the
+    // abstain + blend laws. The sign of `scale` is what mirrors each side.
     "gazeX": {
       "kind": "number",
       "editor": { "as": "coordinate", "range": [-1, 1], "default": 0 },
       "clips": [
-        { "clip": "gazeLeft",  "offset": -1 },
-        { "clip": "gazeRight", "offset":  1 }
+        { "clip": "gazeLeft",  "offset": 0, "scale": -0.001 },
+        { "clip": "gazeRight", "offset": 0, "scale":  0.001 }
       ]
     },
 
     // gazeY — the vertical cursor coordinate, the same construction over the y
-    // slots: gazeUp at offset -1, gazeDown at +1. Because gazeX writes only x and
-    // gazeY only y, the two fold in the host's mix with no weights at all.
+    // slots: gazeUp at scale -0.001, gazeDown at +0.001. Because gazeX writes only
+    // x and gazeY only y, the two fold in the host's mix with no weights at all.
     "gazeY": {
       "kind": "number",
       "editor": { "as": "coordinate", "range": [-1, 1], "default": 0 },
       "clips": [
-        { "clip": "gazeUp",   "offset": -1 },
-        { "clip": "gazeDown", "offset":  1 }
+        { "clip": "gazeUp",   "offset": 0, "scale": -0.001 },
+        { "clip": "gazeDown", "offset": 0, "scale":  0.001 }
       ]
     },
 
-    // heartClock — a clock that plays the bloom clip once per click. The clip owns
-    // its own timing (keys in ms, a 900 ms play), so this controller does NOT scale
-    // time: it places bloom at offset 1 (identity) and just gates it. The host's
-    // source returns the raw click-relative time (t - bloom) in ms, sampled straight
-    // against the clip's ms keys (u = (t - bloom) / 1). Before the first click the
-    // source abstains (undefined) and the controller casts no vote — the eyes rest
-    // and blink shows through.
+    // heartClock — a clock that plays the bloom clip once per click. A clock's
+    // input already IS time, so this is the identity placement (offset 0, scale
+    // 1): the host's source returns the raw click-relative time (t - bloom) in ms,
+    // sampled straight against the clip's ms keys (u = (t - 0) / 1). The clip owns
+    // its own timing (a 900 ms play). Before the first click the source abstains
+    // (undefined) and the controller casts no vote — the eyes rest and blink shows
+    // through.
     "heartClock": {
       "kind": "number",
       "editor": { "as": "clock", "gate": "trigger" },
       "clips": [
-        { "clip": "bloom", "offset": 1 }
+        { "clip": "bloom", "offset": 0, "scale": 1 }
       ]
     },
 

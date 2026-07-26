@@ -1,7 +1,7 @@
 import "./style.css";
 import { initTheme } from "./theme";
 import { data, source } from "./rig-source";
-import { buildClipModel, clipNames, type ClipModel } from "./model";
+import { buildClipModel, clipNames, formatUnit, type ClipModel } from "./model";
 import { mountStage } from "./stage";
 import { mountTimeline } from "./timeline-panel";
 
@@ -53,7 +53,7 @@ function renderAt(t: number): void {
   if (!model) return;
   stage.showClip(model.clip, t);
   timeline.setTime(t);
-  timeEl.textContent = model.unit === "ms" ? `${Math.round(t)} ms` : t.toFixed(2);
+  timeEl.textContent = formatUnit(model.unit, t);
 }
 
 function selectClip(name: string): void {

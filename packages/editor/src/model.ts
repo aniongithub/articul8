@@ -40,6 +40,36 @@ export interface ClipRow {
 /** What horizontal units this clip's rows are measured in. */
 export type ClipUnit = "ms" | "coord";
 
+/**
+ * Render an axis value for display, keyed by the clip's horizontal unit. Each
+ * entry is a small pure `value → label` function — no state, no scaling hidden
+ * elsewhere. Both the timeline ruler (via the control's `formatUnits` hook) and
+ * the editor's own time readout call through here, so the two can never drift:
+ * a `coord` clip reads `0.00 … 1.00`, a `ms` clip reads `0 ms … 2000 ms`.
+ * Adding a unit later (degrees, pixels…) is one line here and nothing in the
+ * control.
+ */
+export const UNIT_FORMATTERS: Record<ClipUnit, (v: number) => string> = {
+  ms: (v) => `${Math.round(v)} ms`,
+  coord: (v) => v.toFixed(2),
+};
+
+/** Format one axis value for display in the clip's unit. */
+export function formatUnit(unit: ClipUnit, v: number): string {
+  return UNIT_FORMATTERS[unit](v);
+}
+
+/**
+ * The playhead's quantization step per unit — the grid the scrubbed time snaps
+ * to. `ms` snaps to whole milliseconds (there's no meaning below one); a `coord`
+ * axis is continuous (`0` = no rounding), so a `[0,1]` gaze parameter scrubs
+ * smoothly instead of collapsing onto its endpoints.
+ */
+export const UNIT_QUANTUM: Record<ClipUnit, number> = {
+  ms: 1,
+  coord: 0,
+};
+
 /** A clip resolved into drawable rows. */
 export interface ClipModel {
   readonly clip: string;
@@ -100,12 +130,13 @@ export function buildClipModel(data: RigData, clip: string): ClipModel {
     }
   }
 
-  // A clip with stored keys spans its own key range and is measured in those
-  // units (ms for a timed clip, [0,1] for a canonical one — a clip past 1 is ms).
-  // A wave-only clip has no keys, so preview it over a legible 2 s of wall time.
+  // A clip is time-domain: its keys are milliseconds, so it is always measured
+  // in `ms` (the coordinate/phase meaning lives on the controller that places
+  // it, never in the clip). A wave-only clip has no keys, so preview it over a
+  // legible 2 s of wall time.
   if (sawKeys) {
     const span = spanOf(rows, [0, 1]);
-    return { clip, unit: span[1] > 1 ? "ms" : "coord", span, rows };
+    return { clip, unit: "ms", span, rows };
   }
   return { clip, unit: "ms", span: [0, 2000], rows };
 }

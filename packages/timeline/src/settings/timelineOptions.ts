@@ -113,4 +113,23 @@ export interface TimelineOptions extends TimelineRanged {
    * Default: [1, 2, 5, 10];
    */
   denominators?: number[];
+
+  /**
+   * Format a gauge value into its tick label. The control has no notion of what
+   * a value *means* (milliseconds, a coordinate, degrees…) — it just renders the
+   * number the host gives it. Supply this to label the axis in the host's unit;
+   * when omitted the control falls back to its built-in HMS-from-milliseconds
+   * formatting.
+   */
+  formatUnits?: (val: number) => string;
+
+  /**
+   * Quantization step applied to the playhead value when the user scrubs or when
+   * it is set programmatically. The control historically rounds time to whole
+   * units (a millisecond assumption); on a non-integer axis (a `[0,1]` coordinate,
+   * say) that collapses every position onto the integers. Set this to the axis's
+   * natural grid — `1` for whole milliseconds, or `0` (or a negative value) to
+   * leave the value continuous. Defaults to `1` (whole units) for back-compat.
+   */
+  timeRounding?: number;
 }

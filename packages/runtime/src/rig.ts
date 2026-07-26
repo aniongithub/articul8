@@ -4,7 +4,7 @@ import { parsePath, buildPath, type ParsedPath, type Seg } from "./path";
 import { parseAttr, type Attr } from "./attr";
 import { blend, type Pose } from "./pose";
 import { at, type Channel, type Clip, type Wrap, type Source, hold, clamp, loop, pingpong } from "./track";
-import { clip, type Anim } from "./layer";
+import { clip, place, type Anim } from "./layer";
 import { segment, type Ease, type Handle } from "./ease";
 import { generators, type Env, type Knob } from "./generator";
 import { interpolate } from "polymorph-js";
@@ -53,10 +53,11 @@ const wraps: Readonly<Record<string, Wrap>> = { hold, clamp, loop, pingpong };
 
 /**
  * A clip as authored: atomic keyframe data. A bag of channels and an optional
- * `wrap` (its own edge rule past its span). A clip is a canonical `[0, 1]` motion
- * — `0` = rest, `1` = full extreme — that knows nothing about clocks,
- * coordinates, ranges, or who samples it. Whoever *places* it (a controller)
- * decides the coordinate it reads.
+ * `wrap` (its own edge rule past its span). A clip is a **time-domain** motion —
+ * its keys are milliseconds, `0` = rest through to its authored duration — that
+ * knows nothing about clocks, coordinates, ranges, or who samples it. Whoever
+ * *places* it (a controller) decides the coordinate it reads and, via `scale`,
+ * how that coordinate maps onto the clip's ms parameter.
  */
 interface ClipData {
   readonly channels: Readonly<Record<string, ChannelData>>;
@@ -65,17 +66,20 @@ interface ClipData {
 }
 
 /**
- * One placement inside a controller: a clip it references, and the `offset` that
- * both positions and scales it. The controller reads its source value `v` and
- * samples the clip at `u = v / offset` — so `offset` is the source value where
- * the clip's `u = 1` (full extreme) lands, and its sign mirrors the clip onto the
- * other side of centre. A left-look clip placed at `offset -1` reaches `u = 1`
- * when the cursor is at `-1`, and abstains (via the clip's `hold`) on the right.
- * `scale` is reserved.
+ * One placement inside a controller: a clip it references, and the affine that
+ * positions it on the controller's input. The controller reads its source value
+ * `v` and samples the clip at `u = (v - offset) / scale`.
+ *   • `offset` (default `0`) anchors the clip — the input value where `u = 0`
+ *     (a phase shift for a wave, the rest coordinate for a gaze).
+ *   • `scale`  (default `1`) is how many input units span one clip parameter
+ *     unit; its sign mirrors the clip onto the other side of `offset`. For a
+ *     gaze whose clip runs `0…1000 ms`, `scale = -0.001` reaches the far extreme
+ *     (`u = 1000`) when the cursor is at `-1`. For a clock, input already *is*
+ *     time, so `offset 0, scale 1` samples the clip's ms keys straight through.
  */
 interface Placement {
   readonly clip: string;
-  readonly offset: number;
+  readonly offset?: number;
   readonly scale?: number;
 }
 
@@ -464,8 +468,9 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
    * names its children by string and the wiring is order-free (cycles caught):
    *   • a **clip** reads directly as `clip(data)` — a pure `parameter → Pose`.
    *   • a **controller** reads its source `v` and folds its placed clips: each is
-   *     sampled at `u = v / offset`, then `blend`ed at equal weight (the abstain +
-   *     carrier-normalization laws make two half-axis clips resolve to one value).
+   *     sampled at `u = (v - offset) / scale`, then `blend`ed at equal weight (the
+   *     abstain + carrier-normalization laws make two half-axis clips resolve to
+   *     one value).
    *   • an interior **mix** node fans in its inputs and folds them through its
    *     `by` controller's per-input weights.
    * Clip / controller / mix names share one namespace; a collision is a build
@@ -495,7 +500,12 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
       const placed = decl.clips!.map((p) => {
         if (!(p.clip in clips))
           throw new Error(`articul8: controller "${name}" places unknown clip "${p.clip}"`);
-        return { anim: resolve(p.clip), offset: p.offset };
+        // The affine that positions the clip on the controller's input: sample it
+        // at `u = (v - offset) / scale`. `offset` anchors it (a phase shift for a
+        // wave, the rest coordinate for a gaze); `scale` is how many input units
+        // span one clip parameter unit, its sign mirroring the clip. A clock is
+        // just the identity placement (offset 0, scale 1): input ms → clip ms.
+        return place(resolve(p.clip), { offset: p.offset ?? 0, scale: p.scale ?? 1 });
       });
       const src = controllerSource(name, `controller "${name}"`);
       const ones = placed.map(() => 1);
@@ -504,7 +514,7 @@ export function rig(data: RigData, opts: RigOptions = {}): Rig {
         if (v === undefined) return {}; // the source abstains → the controller abstains
         if (typeof v !== "number")
           throw new Error(`articul8: controller "${name}" must return a coordinate, not weights`);
-        return blend(placed.map((p) => p.anim(v / p.offset)), ones);
+        return blend(placed.map((pl) => pl(v)), ones);
       };
     } else if (data.mixes && name in data.mixes) {
       const node = data.mixes[name]!;
